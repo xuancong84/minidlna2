@@ -1,0 +1,603 @@
+minidlna (1.3.3+dfsg-1build2) noble; urgency=medium
+
+  * No-change rebuild for CVE-2024-3094
+
+ -- Steve Langasek <steve.langasek@ubuntu.com>  Sun, 31 Mar 2024 09:18:09 +0000
+
+minidlna (1.3.3+dfsg-1build1) noble; urgency=medium
+
+  * No-change rebuild against libflac12t64
+
+ -- Steve Langasek <steve.langasek@ubuntu.com>  Mon, 11 Mar 2024 14:56:53 +0000
+
+minidlna (1.3.3+dfsg-1) unstable; urgency=medium
+
+  [ Barak A. Pearlmutter ]
+  * Add a bit of providence to quilt patches/15-thumbnails.patch
+
+  [ Alexander Gerasiov ]
+  * debian/minidlna.default: Fix typo. Thanks Wesley Schwengle. Closes: #1060649.
+  * debian/minidlna.conf{,.5}: Update to latest release.
+  * debian/minidlna.conf{,.5}: Add thumbnails related options.
+  * Remove outdated 05-update-help-output.patch.
+  * debian/rules: Rollback enable-readynas.
+  * 07-fix-multi-artist-album-handling.patch: Restore meta-headers.
+
+ -- Alexander GQ Gerasiov <gq@debian.org>  Sun, 28 Jan 2024 15:30:31 +0200
+
+minidlna (1.3.3+dfsg-0.2) unstable; urgency=medium
+
+  * Add thumbnail patch from sourceforce forums
+  * Enable NETGEAR ReadyNAS support
+  * Add ReadyMedia to description
+
+ -- Barak A. Pearlmutter <bap@debian.org>  Mon, 06 Nov 2023 10:30:57 +0000
+
+minidlna (1.3.3+dfsg-0.1) unstable; urgency=medium
+
+  * Non-maintainer upload.
+  * debian/copyright: use spaces rather than tabs to start continuation lines.
+  * Bump debhelper from old 12 to 13.
+  * Update renamed lintian tag names in lintian overrides.
+  * Update standards version to 4.6.2, no changes needed.
+  * Patch minor spelling errors.
+  * Harden
+  * Rules do not require root.
+  * Remove autopoint build dependency, as it is redundant
+  * remove annoying extra space in quilt patch
+  * autoconf updates patch
+  * Modernize debian/watch uscan support file
+  * New upstream release
+  * Forward port patches (two have been upstreamed)
+  * Update stray old version number in patch
+  * Add BUGS section to minidlnad(1) with manual audio transcoding example
+  * Move minidlnad(1) to minidlnad(8) and remove minidlna(1) alias per lintian
+
+ -- Barak A. Pearlmutter <bap@debian.org>  Wed, 30 Aug 2023 10:58:19 +0100
+
+minidlna (1.3.2+dfsg-1.1) unstable; urgency=medium
+
+  * Non-maintainer upload.
+  * upnphttp: Fix chunk length parsing (CVE-2023-33476) (Closes: #1037052)
+
+ -- Salvatore Bonaccorso <carnil@debian.org>  Mon, 19 Jun 2023 21:14:33 +0200
+
+minidlna (1.3.2+dfsg-1) unstable; urgency=medium
+
+  * New upstream release (Closes: #1005219, #1011629, #1017183, #1024905).
+  * Remove CVE-2022-26505.patch and fix_FTBFS_configure_error.patch (fixed
+    upstream), refresh other patches.
+  * Remove 09-do-not-disable-logs-with-systemd.patch
+    (Closes: #1018757, #1031627).
+  * Add 11-improve-nl-translation.patch, thanks Manuel Bilderbeek
+    <Manuel.Bilderbeek@gmail.com> (Closes: #1034193).
+  * d/control: Remove lsb-base from dependencies.
+
+ -- Alexander GQ Gerasiov <gq@debian.org>  Wed, 12 Apr 2023 14:01:40 +0300
+
+minidlna (1.3.0+dfsg-2.2) unstable; urgency=medium
+
+  * Non-maintainer upload.
+  * CVE-2022-26505
+    Validate HTTP requests to protect against DNS rebinding, thus forbid
+    a remote web server to exfiltrate media files.
+    (Closes: #1006798)
+
+ -- Thorsten Alteholz <debian@alteholz.de>  Wed, 30 Mar 2022 22:03:02 +0200
+
+minidlna (1.3.0+dfsg-2.1) unstable; urgency=medium
+
+  * Non-maintainer upload.
+  * fix FTBFS with newer autoconf by patching configure.ac.
+    (Closes: #993241)
+  * specify autofs.service dependency correctly, thanks to Mathieu Malaterre
+    and наб (Closes: #1000185)
+
+ -- Florian Ernst <florian@debian.org>  Sun, 13 Feb 2022 11:08:56 +0100
+
+minidlna (1.3.0+dfsg-2) unstable; urgency=medium
+
+  [ Debian Janitor ]
+  * Wrap long lines in changelog entries: 1.2.1+dfsg-3.
+  * Use secure URI in debian/watch.
+  * Drop unnecessary dependency on dh-autoreconf.
+  * Use canonical URL in Vcs-Browser.
+
+  [ Alexander Gerasiov ]
+  * d/minidlna.init, d/minidlna.service: Start after local and remote fs.
+    Thanks Harald Dunkel (Closes: #980860).
+  * d/minidlna.service: Do not use forking.
+  * Add 09-do-not-disable-logs-with-systemd.patch.
+  * Add 10-do-not-close-socket-on-sighup.patch: Fixes daemon problems on SIGHUP
+    (Closes: #979828).
+
+ -- Alexander GQ Gerasiov <gq@debian.org>  Sun, 31 Jan 2021 18:56:14 +0300
+
+minidlna (1.3.0+dfsg-1) unstable; urgency=medium
+
+  * New upstream release. (Closes: #976956, #885014).
+  * debian/patches refreshed.
+  * Add 08-Fix-testupnpdescgen-build.patch: Fixes testupnpdescgen build.
+  * debian/minidlna.init: Use SIGHUP for log rotation.
+  * d/copyright: Updated according to changes in new upstream.
+
+ -- Alexander GQ Gerasiov <gq@debian.org>  Thu, 07 Jan 2021 20:07:28 +0300
+
+minidlna (1.2.1+dfsg-3) unstable; urgency=medium
+
+  * Add 0011-upnphttp-Disallow-negative-HTTP-chunk-lengths.patch CVE-2020-28926
+    (Closes: #976595).
+  * Add 0012-upnphttp-Validate-SUBSCRIBE-callback-URL.patch CVE-2020-12695
+    (Closes: #976594).
+  * d/minidlna.postrm: Do not fail on purge (Closes: #975372).
+
+ -- Alexander GQ Gerasiov <gq@debian.org>  Tue, 22 Dec 2020 11:05:27 +0300
+
+minidlna (1.2.1+dfsg-2) unstable; urgency=medium
+
+  [ Alexander Gerasiov ]
+  * Add 14-fix-gcc10-ftbfs.patch: Fixes FTBFS with gcc10 (Closes: #957541).
+  * Move logs to /var/log/minidlna dir.
+  * Remove unused START_DAEMON var from default file (Closes: #879541).
+  * Add systemd service file (Closes: #950270).
+  * Bump debhelper's version to 12.
+  * Bump Standards-Version.
+  * d/control: Update Vcs headers.
+  * d/copyright: Secure links to format and homepage.
+
+  [ Debian Janitor ]
+  * Trim trailing whitespace.
+  * debian/copyright: use spaces rather than tabs to start continuation lines.
+  * Update renamed lintian tag names in lintian overrides.
+  * Set upstream metadata fields: Archive, Repository.
+
+  [ Alexander Gerasiov ]
+  * Add 15-use-newer-ip_multicast_if-api.patch: (Closes: #941410).
+  * d/control: Update description (Closes: #927393).
+
+ -- Alexander GQ Gerasiov <gq@debian.org>  Mon, 04 May 2020 14:01:19 +0300
+
+minidlna (1.2.1+dfsg-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Alexander GQ Gerasiov <gq@debian.org>  Sun, 27 Aug 2017 01:12:26 +0300
+
+minidlna (1.2.0+dfsg-2) unstable; urgency=medium
+
+  * debian/minidlnad.1: Mention -r option.
+  * debian/minidlna.default: Add -r option. Thanks to Dirk Schmitt for
+    suggestion. (Closes: #870868).
+  * debian/NEWS: Mention -r option in defaults.
+  * debian/copyright: Fix avahi.? entry.
+  * minidlna.conf, minidlna.conf.5: Add new tivo_discovery option.
+  * debian/minidlna.conf.5: Small fixes.
+
+ -- Alexander GQ Gerasiov <gq@debian.org>  Sun, 13 Aug 2017 19:17:06 +0300
+
+minidlna (1.2.0+dfsg-1) unstable; urgency=medium
+
+  * 11-http-parse.patch removed: fixed upstream.
+  * 12-libavformat-57.patch removed: fixed upstream.
+  * debian/patches refreshed.
+  * debian/copyright updated.
+  * Bump Standards-Version to 4.0.0 (no additional changes needed).
+
+ -- Alexander GQ Gerasiov <gq@debian.org>  Fri, 04 Aug 2017 22:50:21 +0300
+
+minidlna (1.1.6+dfsg-2) unstable; urgency=medium
+
+  * minidlna.conf, minidlna.conf.5: Clarify meaning of user and uuid options.
+    (Closes: #854802)
+  * minidlna.conf.5: Fix format issue with network_interface option.
+  * Fix typos in debian/NEWS (Closes: #858012).
+  * minidlna.conf.5: Fix warnings (thanks, Lintian).
+
+ -- Alexander GQ Gerasiov <gq@debian.org>  Wed, 12 Apr 2017 14:09:22 +0300
+
+minidlna (1.1.6+dfsg-1) unstable; urgency=medium
+
+  * debian/minidlna.conf: Fix default values and update comments.
+  * debian/minidlna.conf.5: Reformat text, add example from upstream's manpage.
+  * debian/minidlna.conf, debian/minidlna.conf.5, debian/NEWS: New config option
+    wide_links.
+  * debian/patches: Patches refreshed.
+  * debian/patches/06-fix-setlocale.patch removed, fixed upstream.
+  * Add 11-http-parse.patch and 12-libavformat-57.patch from upstream's git.
+  * debian/copyright: Misc small fixes and updates.
+  * debian/control: Use secure (https) links in Homepage and Vcs-* fields.
+  * Add 13-missing-ru-po.patch: Add missing translation string to ru.po.
+
+ -- Alexander GQ Gerasiov <gq@debian.org>  Wed, 25 Jan 2017 19:35:22 +0300
+
+minidlna (1.1.5+dfsg-4) unstable; urgency=medium
+
+  * debian/minidlna.postinst: Do not fail if cache_dir is absent.
+
+ -- Alexander GQ Gerasiov <gq@debian.org>  Mon, 01 Aug 2016 16:45:51 +0300
+
+minidlna (1.1.5+dfsg-3) unstable; urgency=medium
+
+  * Control /var/lib/minidlna with debhelper/dpkg. (Closes: #820286.)
+  * Bump Standard's version, no changes needed.
+
+ -- Alexander GQ Gerasiov <gq@debian.org>  Thu, 21 Apr 2016 00:25:41 +0300
+
+minidlna (1.1.5+dfsg-2) unstable; urgency=high
+
+  * postinst: Fix user setup. (Closes: #810343.)
+  * minidlnad.1: Clarify -S option behavior. (Closes: #805583)
+
+ -- Alexander GQ Gerasiov <gq@debian.org>  Mon, 11 Jan 2016 13:58:27 +0300
+
+minidlna (1.1.5+dfsg-1) unstable; urgency=medium
+
+  * New upstream release. (Closes: #790927.)
+  * debian/patches refreshed,
+    08_fix_multicast_from_other_subnet.patch and
+    09-check-embedded-art.patch removed: fixed upstream.
+  * debian/control: Remove initscripts dependency (Closes: #804979).
+  * Refactor maintainer's scrips: remove conffile parsing and dpkg-statoverride usage.
+  * minidlnad.1: Update pidfile location. (Closes: #805582.)
+
+ -- Alexander GQ Gerasiov <gq@debian.org>  Sun, 03 Jan 2016 16:45:53 +0300
+
+minidlna (1.1.4+dfsg-4) unstable; urgency=medium
+
+  * Remove wrong 10-fix-FTBFS-on-Hurd.patch, it's senseless.
+  * Add 10-db_dir-should-not-affect-log_dir.patch (Closes: #786776)
+
+ -- Alexander GQ Gerasiov <gq@debian.org>  Wed, 27 May 2015 16:33:45 +0300
+
+minidlna (1.1.4+dfsg-3) unstable; urgency=medium
+
+  * Add debian/patches/09-check-embedded-art.patch: Better handle embedded
+    art in mp4. (Closes: #781811)
+  * 08_fix_multicast_from_other_subnet.patch updated to not use IP_PKTINFO
+    on systems without it (e.g. kFreeBSD). Fixes FTBFS on non-linux arches.
+  * Add 10-fix-FTBFS-on-Hurd.patch: Fix FTBFS on GNU/Hurd.
+
+ -- Alexander GQ Gerasiov <gq@debian.org>  Sun, 12 Apr 2015 18:33:47 +0300
+
+minidlna (1.1.4+dfsg-2) unstable; urgency=medium
+
+  * debian/changelog: Add missing record about debian/watch.
+  * Add 07-fix-multi-artist-album-handling.patch, thanks goes to Florian Will.
+    (Closes: #734383)
+  * Remove listening_ip/listening_address options from manpages and default
+    config. (Closes: #756169)
+  * Update minidlna.conf.5 and minidlna.conf with new options and some comment
+    fixes.
+  * Add 08_fix_multicast_from_other_subnet.patch: Fix multicast from other
+    subnets. (Closes: #749090)
+
+ -- Alexander GQ Gerasiov <gq@debian.org>  Sat, 14 Mar 2015 19:59:24 +0300
+
+minidlna (1.1.4+dfsg-1) unstable; urgency=medium
+
+  * New upstream release. (Closes: #774421, #698312, #764278, #779577)
+  * debian/control: Set myself as maintainer (Closes: #779429).
+  * debian/control: Point Vcs-* to collab-maint.
+  * Move debian/make_icons.sh and debian/openlogo-nd.svg to debian/extra.
+  * debian/copyright: Update file, fix some issues.
+  * debian/copyright: Add myself as copyright holder for debian/*.
+  * Remove debian/gbp.conf, debian/make_patches.sh, debian/mbox2dep3.py.
+  * Update Debian patches.
+     + Patches removed (do ship patched debian/minidlna.conf instead):
+       0001-Add-a-comment-about-listening_ip-in-minidlna.conf.patch,
+       0002-Improve-the-default-configuration-file.patch,
+       0003-Update-the-default-configuration-file.patch,
+       0006-Update-the-default-configuration-file.patch,
+       0009-Remove-warning-about-media_dir-from-minidlna.conf.patch,
+       0010-Use-var-cache-minidlna-as-the-default-db_dir.patch
+     + Patches renamed and refreshed:
+       0004-Use-run-instead-of-var-run-to-store-runtime-files.patch ->
+         01-run-instead-of-var-run.patch
+       0007-Use-USER-instead-of-LOGNAME-in-the-default-friendly_.patch ->
+         02-use-USER-instead-of-LOGNAME.patch
+       0011-Make-sure-the-database-is-closed-after-scanning.patch ->
+         03-make-sure-the-database-is-closed-after-scanning.patch
+       0005-Update-help-output-shown-by-minidlna-h.patch ->
+         05-update-help-output.patch
+     + Patch renamed and rewritten:
+       0008-Reload-log-file-upon-receiving-SIGHUP.patch ->
+         04-reload-log-file-on-SIGUSR2.patch (Closes: #747853,  #749265)
+  * Add 06-fix-setlocale.patch: Fix encoding issues. (Closes: #770120)
+  * debian/control: Bump Standard's version.
+  * debian/rules: Install to /usr/sbin, not to /usr/bin. Also (Closes: #760792).
+  * debian/minidlna.init: Rewrite init script. (Based on one from dh_make.)
+  * Install debian/minidlna.conf, not upstream one.
+  * debian/watch: Fix issue with upstream tarballs. Thanks  Florian Will.
+    (Closes: #751965)
+
+ -- Alexander GQ Gerasiov <gq@debian.org>  Mon, 02 Mar 2015 19:14:08 +0300
+
+minidlna (1.1.2+dfsg-1.1) unstable; urgency=medium
+
+  * Non-maintainer upload.
+  * Fix FTBFS with libav10.
+    Add 0012-Fix-FTBFS-with-libav10.patch from upstream.
+    Closes: #747813, #751011.
+
+ -- Anibal Monsalve Salazar <anibal@debian.org>  Mon, 16 Jun 2014 10:59:59 +0100
+
+minidlna (1.1.2+dfsg-1) unstable; urgency=low
+
+  * New upstream version (Closes: #711234)
+  * The new upstream version is no longer affected by CVE-2013-2745,
+    CVE-2013-2738 or CVE-2013-2739 (Closes: #717131)
+  * Use SIGUSR1 instead of SIGHUP to reopen the log file after a logrotate,
+    since upstream is now using SIGHUP to reload the network interfaces
+  * Update copyright information for upstream files
+  * Bump Standards-Version to 3.9.5 (no changes required)
+  * Override lintian warning debian-watch-may-check-gpg-signature, as upstream
+    doesn't sign the source tarball
+
+ -- Benoît Knecht <benoit.knecht@fsfe.org>  Mon, 28 Apr 2014 12:05:41 +0200
+
+minidlna (1.1.0+dfsg-1) UNRELEASED; urgency=low
+
+  * New upstream version
+    - Add support for other operating systems
+    - Switch to autoconf from our handcrafted genconfig.sh
+    - Add configuration option for UUID
+    - Add configuration option to specify the user to run as
+    - Add support for limiting a media dir to multiple media types
+    - Force a rescan if we detect a new or missing media_dir entry
+    - Fix crash caused by certain TiVo clients
+    - Fix crash bug on video files with some ffmpeg library versions
+    - Add support for TiVo MPEG-TS files
+    - Add some logging and forking tweaks to work better with systemd
+    - Validate or escape user input to prevent SQL injection
+    - Add forced sorting support for Panasonic devices
+  * Upstream renamed /usr/bin/minidlna to /usr/bin/minidlnad
+    - Update the init script accordingly
+    - Update the documentation accordingly; minidlna(1) is now called
+      minidlnad(1), but the former still points to the latter
+  * Remove warnings about needing to force a rescan after changing media_dir
+    from the documentation, as it is now done automatically
+  * Use dh-autoreconf to deal with the new upstream build system
+  * Add logrotate support (Closes: #697613)
+    - minidlnad reopens its log file upon receiving SIGHUP
+    - Ship a logrotate configuration file that rotates /var/log/minidlna.log
+      weekly
+    - Remove rotated log files when purging the package
+  * Use /var/cache/minidlna as the default db_dir
+    - Move the database file and art cache to this new location if necessary
+      in postinst
+  * Bump Standards-Version to 3.9.4
+    - Depend on initscripts (>= 2.88dsf-13.3) since we use /run
+  * Do not source /lib/init/vars.sh in the init script
+  * Update debian/copyright with new upstream files
+
+ -- Benoît Knecht <benoit.knecht@fsfe.org>  Sun, 23 Jun 2013 08:26:12 +0200
+
+minidlna (1.0.25+dfsg-1) UNRELEASED; urgency=low
+
+  * New upstream version
+    - Fix a couple crash bugs on malformed WAV files
+    - Forcibly tweak the model number for Xbox360 clients, or they might
+      ignore us
+    - Enable all network interfaces by default if none were specified
+    - Add flag to force downscaled thumbnails rather than using embedded ones
+    - Add DirecTV client detection, and fix image resolution issue
+    - Add support for the latest ffmpeg/libav library versions
+    - Fix a potential crash on requests for a resize of a non-existent image
+    - Make DeviceID checking more permissive for Sagem Radio
+  * Update the documentation with new options and various corrections in the
+    following places:
+    - minidlna(1) man page;
+    - minidlna.conf(5) man page;
+    - output of "minidlna -h";
+    - default configuration file.
+  * Display the user minidlna is running as in the default friendly name
+  * Adapt "Get IP and MAC addresses in a non Linux-specific way" patch to
+    upstream changes
+  * Fix Makefile so that hardening flags are actually passed to the compiler
+  * preinst: Make sure that the home directory exists and is owned by the
+    correct user:group
+  * postrm: Do not remove the minidlna user and group on purge
+  * postrm: During purge, only remove the $HOME directory if it's
+    /var/lib/minidlna; we don't want to mess with home directories if the
+    admin changed the default
+  * postrm: Do not remove the configuration file in the purge case, it has
+    already been removed by dpkg before the script is called
+  * Update period of copyright for debian/*
+  * Replace `...` with $(...) in all maintainer scripts
+  * Do not include scripts specific to the git repository in the debian/
+    directory in the source package
+  * Use a .orig suffix in the top-level directory name of the .orig.tar.gz
+    archive, per Best Packaging Practices 6.7.8.2 (thanks to Bart Martens)
+
+ -- Benoît Knecht <benoit.knecht@fsfe.org>  Thu, 26 Jul 2012 17:30:08 +0200
+
+minidlna (1.0.24+dfsg-1) unstable; urgency=low
+
+  * New upstream version (Closes: #661259)
+    - Fix playlist browsing with no SortOrder specified
+    - Fix inotify detection of caption file removal
+    - Handle an empty DeviceID from Zyxel media player SOAP request
+    - Fix false positives in playlist caching optimization when we have
+      duplicate file names in different directories
+    - Trim the camera model name extracted from EXIF tags
+    - Add support for user-configurable log level settings
+    - Add DLNA.ORG_FLAGS support
+  * Update the minidlna.conf(5) man page with new options
+  * Update the default minidlna.conf configuration file accordingly
+  * Bump Standards-Version to 3.9.3
+    - Use /run instead of /var/run by default
+  * Use debhelper compat 9
+  * Update the DEP-5 Format URL in debian/copyright
+
+ -- Benoît Knecht <benoit.knecht@fsfe.org>  Thu, 01 Mar 2012 17:39:15 +0100
+
+minidlna (1.0.23+dfsg-1) unstable; urgency=low
+
+  * New upstream version (Closes: #659871)
+    - Enable the subtitle menu on some Samsung TV's
+    - Add subtitle support for Panasonic TV's
+    - Add workarounds for LifeTab tablets' bad behavior
+    - Speed up playlist parsing
+    - Make metadata-based virtual containers case insensitive
+    - Add folder art support (very few clients support this though)
+    - Improve trimming of quotation marks
+    - Fix SRT caption support with the latest Samsung Series D firmware
+    - Fix subtitles on LG TV's for items whose titles don't have a dot in
+      them
+    - Add support for the av:mediaClass tag, so some Sony devices can filter
+      items by media type
+    - Fix inotify detection issues on first-level folders
+    - Work around LifeTab's broken DLNA support
+    - Add image rotation support during resize (mostly useful for TiVo)
+  * Add copyright information for new upstream files
+  * Remove versioned dependency on adduser and lsb-base, as both are satisfied
+    even in oldstable
+  * Remove dependency on (gawk | mawk) as awk is depended on by an essential
+    package (thanks to Jakub Wilk)
+  * Output messages to stderr in postrm (thanks to Jakub Wilk)
+  * Improve the default configuration file with more detailed comments, that
+    should help avoid confusion about some options (Closes: #653221)
+
+ -- Benoît Knecht <benoit.knecht@fsfe.org>  Fri, 17 Feb 2012 16:18:19 +0100
+
+minidlna (1.0.21+dfsg-1.1) unstable; urgency=low
+
+  * Non-maintainer upload.
+  * Replace libjpeg62-dev build-dep with libjpeg-dev (closes: #643636)
+
+ -- Julien Cristau <jcristau@debian.org>  Sun, 29 Jan 2012 18:36:58 +0100
+
+minidlna (1.0.22+dfsg-1) UNRELEASED; urgency=low
+
+  * Imported Upstream version 1.0.22
+  * Make sure '/etc/init.d/minidlna status' reports the correct status
+    (Closes: #650328)
+  * DEP-5 debian/copyright:
+    - Space-delimited list in Files headers
+    - Bump Format URL to revision 213 (no changes)
+  * Build-Depend on libjpeg-dev instead of libjpeg62-dev, as part of the
+    transition from libjpeg62 to libjpeg8 (Closes: #643636)
+  * Document the 'listening_ip' configuration option
+  * Add a Description and rewrite the Short-Description of the init script
+
+ -- Benoît Knecht <benoit.knecht@fsfe.org>  Wed, 21 Dec 2011 14:06:39 +0100
+
+minidlna (1.0.21+dfsg-2) UNRELEASED; urgency=low
+
+  * Depend on lsb-base (required by the init script)
+
+ -- Benoît Knecht <benoit.knecht@fsfe.org>  Thu, 04 Aug 2011 20:04:57 +0200
+
+minidlna (1.0.21+dfsg-1) unstable; urgency=low
+
+  * New upstream version (1.0.21)
+  * Fix typo in minidlna(1) man page
+  * Document the new root_container option in minidlna.conf(5)
+  * Fix FTBFS on kfreebsd:
+    - Remove FreeBSD version test in genconfig.sh
+    - Include linux/limits.h on Linux only
+    - Make inotify support optional
+    - Compile inotify support on Linux only
+    - Use SYS_clock_gettime instead of __NR_clock_gettime
+    - Define MSG_MORE if it doesn't exist
+    - Get IP and MAC addresses in a non Linux-specific way
+  * Fix runtime failures on kfreebsd:
+    - Do not use sendfile if it's not implemented
+    - Do not let make_dir fail on EISDIR
+  * Add a script and Debian's SVG logo to make a DFSG-compatible icons.c file
+
+ -- Benoît Knecht <benoit.knecht@fsfe.org>  Fri, 22 Jul 2011 11:50:40 +0200
+
+minidlna (1.0.20+dfsg-2) unstable; urgency=low
+
+  * Correct Version Control System links
+  * Document the force-reload option of the init script
+  * Install upstream changelog
+  * Comply with DEP-5 revision 174
+
+ -- Benoît Knecht <benoit.knecht@fsfe.org>  Sat, 02 Jul 2011 14:16:11 +0200
+
+minidlna (1.0.20+dfsg-1) unstable; urgency=low
+
+  * Imported Upstream version 1.0.20 (Closes: #629140)
+  * Make source dfsg clean (Closes: #628952)
+  * Better document the media_dir configuration option (Closes: #626835)
+  * Don't let the configuration fail at compile time on kFreeBSD and Hurd
+  * Update copyright information (and use DEP-5 version 174)
+  * Add links to the git repository of the debian package
+  * Bump Standards-Version to 3.9.2 (no changes)
+  * Raise debhelper compatibility level to 8
+
+ -- Benoît Knecht <benoit.knecht@fsfe.org>  Wed, 29 Jun 2011 21:20:04 +0200
+
+minidlna (1.0.19-1) unstable; urgency=low
+
+  * New upstream version 1.0.19
+
+ -- Benoît Knecht <benoit.knecht@fsfe.org>  Thu, 24 Mar 2011 16:45:08 +0100
+
+minidlna (1.0.18-5) unstable; urgency=low
+
+  [ Piotr Górski ]
+  * Fix FTBFS by linking to libogg (Closes: #618067)
+
+  [ Benoît Knecht ]
+  * Create /var/run/minidlna and put the PID file in it
+    (Closes: #617722, #613853)
+  * Build-depend on libogg-dev explicitly
+
+  [ Justin Maggard ]
+  * Identify Matroska regardless of its content
+
+ -- Benoît Knecht <benoit.knecht@fsfe.org>  Tue, 15 Mar 2011 23:39:17 +0100
+
+minidlna (1.0.18-4) unstable; urgency=low
+
+  [ Justin Maggard ]
+  * Complete/clarify license information
+
+  [ Benoît Knecht ]
+  * Update debian/copyright with the new license info
+  * Fix FSF address in the GPL license headers
+  * Add email addresses in the copyright file
+  * Removing AUTHORS section from the man pages
+  * Remove prerm script and let debhelper generate it
+  * In postrm, only remove files created by minidlna
+  * When minidlna is called with -R, only remove art_cache and files.db
+
+ -- Benoît Knecht <benoit.knecht@fsfe.org>  Tue, 23 Nov 2010 20:26:32 +0100
+
+minidlna (1.0.18-3) unstable; urgency=low
+
+  * Fix the following issues (thanks to Michael Tautschnig for pointing them
+    out):
+    - Lintian warning (hyphen-used-as-minus-sign) in minidlna(1) man page
+    - Lintian warning (maintainer-script-without-set-e) in {pre,post}{inst,rm}
+    - Let {pre,post}inst take action in specific states only
+    - Use values from /etc/default/minidlna in {pre,post}{inst,rm}
+
+ -- Benoît Knecht <benoit.knecht@fsfe.org>  Wed, 03 Nov 2010 00:45:42 +0100
+
+minidlna (1.0.18-2) unstable; urgency=low
+
+  * Add libavutil-dev and libavcodec-dev to Build-Depends (thanks to Fernando
+    Lemos)
+  * Fix a typo in tagutils.c (thanks to Fernando Lemos)
+  * Convert the minidlna man page to mdoc
+  * Add a man page for minidlna.conf
+
+ -- Benoît Knecht <benoit.knecht@fsfe.org>  Fri, 22 Oct 2010 13:06:02 +0200
+
+minidlna (1.0.18-1) unstable; urgency=low
+
+  * Initial release (Closes: #597228)
+  * Adapted Makefile:
+    - Use $(DESTDIR) as installation prefix
+    - Add a distclean target
+    - Custom log directory
+  * Add a log_dir configuration option
+  * Man page for minidlna(1)
+  * Init script
+  * Pre- and post- inst/rm scripts to add/remove a minidlna user and group
+
+ -- Benoît Knecht <benoit.knecht@fsfe.org>  Fri, 15 Oct 2010 00:32:01 +0200

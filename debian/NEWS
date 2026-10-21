@@ -1,0 +1,24 @@
+minidlna (1.2.0+dfsg-2) unstable; urgency=medium
+
+  With 1.2.0 release new option -r was introduced. It forces minidlnad to do
+  soft rebuild of the database on startup. It helps in situations when data on
+  disk was changed, but minidlna daemon missed this for some reason and did not
+  update the database.
+
+  I added -r option to default parameters. If your system restarts often and
+  you do not need this, feel free to remove it from /etc/default/minidlna.
+
+ -- Alexander GQ Gerasiov <gq@debian.org>  Sun, 13 Aug 2017 18:18:12 +0300
+
+minidlna (1.1.6+dfsg-1) unstable; urgency=medium
+
+  With this version of minidlna new config option appears: wide_links. By
+  default it's turned off and disallows access to files outside media_dirs
+  even if symlinks from media_dirs point to them.
+
+  If you have symlinks in you media_dirs (/var/lib/minidlna by default) and
+  want to access them via minidlna do not forget to turn wide_links on.
+
+  See minidlna.conf(5) or comments in config file itself for details.
+
+ -- Alexander GQ Gerasiov <gq@debian.org>  Wed, 25 Jan 2017 19:12:33 +0300

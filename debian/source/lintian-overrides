@@ -1,0 +1,2 @@
+# Upstream doesn't sign its source tarballs:
+minidlna source: debian-watch-does-not-check-openpgp-signature

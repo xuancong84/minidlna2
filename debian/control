@@ -1,0 +1,41 @@
+Source: minidlna
+Section: net
+Priority: optional
+Maintainer: Ubuntu Developers <ubuntu-devel-discuss@lists.ubuntu.com>
+XSBC-Original-Maintainer: Alexander GQ Gerasiov <gq@debian.org>
+Build-Depends: debhelper-compat (= 13),
+               libavcodec-dev,
+               libavformat-dev,
+               libavutil-dev,
+               libexif-dev,
+               libflac-dev,
+               libid3tag0-dev,
+               libjpeg-dev,
+               libogg-dev,
+               libsqlite3-dev,
+               libvorbis-dev,
+	       libffmpegthumbnailer-dev,
+Standards-Version: 4.6.2
+Rules-Requires-Root: no
+Homepage: https://sourceforge.net/projects/minidlna/
+Vcs-Git: https://salsa.debian.org/debian/minidlna.git
+Vcs-Browser: https://salsa.debian.org/debian/minidlna
+
+Package: minidlna
+Architecture: any
+Depends: adduser,
+         ${misc:Depends},
+         ${shlibs:Depends}
+Pre-Depends: ${misc:Pre-Depends}
+Description: lightweight DLNA/UPnP-AV server targeted at embedded systems
+ MiniDLNA (aka ReadyDLNA or ReadyMedia) is server software with the
+ aim of being fully compliant with DLNA/UPnP-AV clients.
+ .
+ The minidlna daemon serves media files (music, pictures, and video) to
+ clients on your network.  Example clients include applications such as
+ totem and Kodi (xbmc), and devices such as portable media players,
+ smartphones, and televisions (common part of SmartTV kit).
+ .
+ MiniDLNA is a simple, lightweight alternative to mediatomb, but has
+ fewer features. It does not have a web interface for administration
+ and must be configured by editing a text file.

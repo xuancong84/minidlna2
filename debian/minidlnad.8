@@ -1,0 +1,121 @@
+.\" Man page for minidlnad
+.\"
+.\" Copyright (C) 2010-2013 Benoît Knecht <benoit.knecht@fsfe.org>
+.\"
+.\" Redistribution and use in source and binary forms, with or without
+.\" modification, are permitted provided that the following conditions
+.\" are met:
+.\" 1. Redistributions of source code must retain the above copyright
+.\"    notice, this list of conditions and the following disclaimer.
+.\" 2. Redistributions in binary form must reproduce the above copyright
+.\"    notice, this list of conditions and the following disclaimer in the
+.\"    documentation and/or other materials provided with the distribution.
+.\" 3. Neither the name of the University nor the names of its contributors
+.\"    may be used to endorse or promote products derived from this software
+.\"    without specific prior written permission.
+.Dd June 7, 2013
+.Dt MINIDLNAD \&8 "System Manager's Manual"
+.Os Debian
+.Sh NAME
+.Nm minidlnad
+.Nd lightweight DLNA/UPnP-AV server
+.Sh SYNOPSIS
+.Nm
+.Op Fl f Ar config_file
+.Op Fl d
+.Op Fl v
+.Op Fl u Ar user
+.Op Fl i Ar interface
+.Op Fl p Ar port
+.Op Fl s Ar serial
+.Op Fl m Ar model_number
+.Op Fl t Ar notify_interval
+.Op Fl P Ar pid_filename
+.Op Fl w Ar url
+.Op Fl S
+.Op Fl L
+.Op Fl R
+.Pp
+.Nm
+.Op Fl h \*[Ba] Fl V
+.Sh DESCRIPTION
+The
+.Nm
+daemon is a DLNA/UPnP-AV server sharing media files (video, music and pictures)
+to clients on your network. Clients are typically multimedia players such as
+vlc, totem and xbmc, and devices such as portable media players, smartphones,
+televisions, video game entertainment systems and blu-ray players.
+.Pp
+By default,
+.Nm
+listens on all the network interfaces (except loopback) for clients. This
+behavior can be changed on the command-line using the
+.Fl i
+option, or in the configuration file through the
+.Cm network_interface
+option
+.Pq see Xr minidlna.conf 5 for details .
+.Sh OPTIONS
+Most of the options below can also be set in a configuration file, as described
+in
+.Xr minidlna.conf 5 .
+.Bl -tag -width Ds
+.It Fl d
+Activate debug mode (do not daemonize).
+.It Fl f Ar config_file
+Specify the location of the configuration file. Uses
+.Pa /etc/minidlna.conf
+by default.
+.It Fl h
+Show help and exit.
+.It Fl i Ar interface
+Network interface to listen on. Can be specified more than once.
+.It Fl L
+Do not create playlists.
+.It Fl m Ar model_number
+Model number the daemon will report to clients in its XML description.
+.It Fl P Ar pid_filename
+PID file to use; the default is
+.Pa /run/minidlna/minidlna.pid .
+.It Fl p Ar port
+Port number to listen on.
+.It Fl R
+Forces a full rescan of the media files. First it will remove all cached data and database. Any bookmarks will be lost.
+.It Fl r
+Do a non-destructive rescan of the media files on start-up.
+.It Fl S
+Stay foreground. Can be used when
+.Nm
+is being managed by
+.Nm systemd
+.It Fl s Ar serial
+Serial number the daemon will report to clients in its XML description.
+.It Fl t Ar notify_interval
+Notify interval, in seconds; defaults to 895 seconds.
+.It Fl u Ar user
+Specify which user
+.Nm
+should run as, instead of
+.Li root ;
+.Ar user
+can either be a numerical UID or a user name.
+.It Fl V
+Show the program version and exit.
+.It Fl v
+Verbose output.
+.It Fl w Ar url
+Sets the presentation url; the default is http address.
+.El
+.Sh FILES
+.Bl -tag -width Ds -compact
+.It Pa /etc/minidlna.conf
+Default system-wide configuration file. See
+.Xr minidlna.conf 5
+for details on the syntax.
+.El
+.Sh BUGS
+Sometimes automatic transcoding fails. When this happens, a workaround is to manually add a new track which the player can handle. Here is a working example for an MKV file whose audio track an LG TV could not play.
+.Pp
+$ ffmpeg.exe \-i input.mkv \-map 0:v \-map 0:a:0 \-map 0:a \-map 0:s? \-c:v copy \-c:s copy \-c:a copy \-c:a:0 eac3 \-ab 1536k \-disposition:a:0 default \-disposition:a:1 0 output.mkv
+.Sh SEE ALSO
+.Xr minidlna.conf 5

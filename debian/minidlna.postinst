@@ -1,0 +1,67 @@
+#!/bin/sh
+# postinst script for minidlna
+
+set -e
+
+USER=minidlna
+HOME_DIR=/var/lib/minidlna
+CACHE_DIR=/var/cache/minidlna
+
+setup_user() {
+
+	if ! getent passwd "${USER}" >/dev/null; then
+		adduser --quiet\
+			--system \
+			--group \
+			--gecos "MiniDLNA server" \
+			--home "${HOME_DIR}" \
+			--no-create-home \
+			${USER}
+	fi
+}
+
+setup_cache() {
+	if [ ! -d "${CACHE_DIR}" ];then
+		mkdir -p "${CACHE_DIR}"
+		chown ${USER}:${USER} "${CACHE_DIR}"
+		chmod 750 "${CACHE_DIR}"
+	fi
+}
+
+fix_statoverride() {
+	# Previous versions create some dumb overrides and do not clean them on
+	# removal, so we should remove them here.
+        for file in /var/lib/minidlna /var/cache/minidlna /etc/minidlna.conf;do
+		if dpkg-statoverride --list "${file}" >/dev/null; then
+			dpkg-statoverride --remove "${file}"
+		fi
+	done
+}
+
+fix_permissions() {
+	# Previous versions use some strange and even not secure permissions,
+	# so we should fix them here.
+	chown root:root /etc/minidlna.conf
+	if [ -d "${CACHE_DIR}" ];then
+		chown ${USER}:${USER} "${CACHE_DIR}"
+		chmod 750 "${CACHE_DIR}"
+	fi
+}
+
+ACTION="$1"
+OLD_VERSION="$2"
+
+if [ "$ACTION" = configure ];then
+	setup_user
+
+	if dpkg --compare-versions "$OLD_VERSION" lt-nl 1.1.5; then
+		fix_statoverride
+		fix_permissions
+	fi
+
+	setup_cache
+fi
+
+#DEBHELPER#
+
+exit 0
