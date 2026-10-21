@@ -35,3 +35,7 @@ po/stamp-po
 stamp-h1
 .deps/
 *.o
+
+# quilt working state (backups of patched files); rebuild in a fresh clone
+# by reverse-applying debian/patches/series, then: quilt push -a
+.pc/

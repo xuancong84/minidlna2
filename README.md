@@ -136,9 +136,17 @@ To change upstream files, record the change in a patch:
 
 ```sh
 export QUILT_PATCHES=debian/patches
-quilt new 20-my-change.patch && quilt add file.c   # before editing
+quilt new 26-my-change.patch && quilt add file.c   # before editing
 # ... edit ...
 quilt refresh -p ab --no-timestamps --no-index
+```
+
+quilt keeps its state in `.pc/`, which is not in git. In a fresh clone,
+rebuild it once before using quilt (building packages doesn't need it):
+
+```sh
+for p in $(tac debian/patches/series); do patch -R -p1 -s < debian/patches/$p; done
+QUILT_PATCHES=debian/patches quilt push -a
 ```
 
 ## Install

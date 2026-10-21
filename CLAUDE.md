@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-MiniDLNA (ReadyMedia) 2.1.0 is a UPnP-A/V / DLNA media server daemon (`minidlnad`) written in C: Debian's minidlna 1.3.3+dfsg plus local patches 16–25. The version lives in `debian/changelog` (package `2.1.0-1`), `AC_INIT` in `configure.ac` and `MINIDLNA_VERSION` in `upnpglobalvars.h`; only binary builds (`dpkg-buildpackage -b`) work, as there is no 2.1.0 orig tarball. This tree is the **Debian source package** (`+dfsg`): `debian/` holds the packaging, and the quilt patches in `debian/patches/` (listed in `debian/patches/series`) are **already applied** to the working tree (see `.pc/applied-patches`). Changes to upstream sources should normally be made as a new or updated quilt patch, not as bare edits, or the package build will diverge from the patch stack.
+MiniDLNA (ReadyMedia) 2.1.0 is a UPnP-A/V / DLNA media server daemon (`minidlnad`) written in C: Debian's minidlna 1.3.3+dfsg plus local patches 16–25. The version lives in `debian/changelog` (package `2.1.0-1`), `AC_INIT` in `configure.ac` and `MINIDLNA_VERSION` in `upnpglobalvars.h`; only binary builds (`dpkg-buildpackage -b`) work, as there is no 2.1.0 orig tarball. This tree is the **Debian source package** (`+dfsg`): `debian/` holds the packaging, and the quilt patches in `debian/patches/` (listed in `debian/patches/series`) are **already applied** to the working tree (see `.pc/applied-patches`; `.pc/` is not in git, see README for rebuilding it in a fresh clone). Changes to upstream sources should normally be made as a new or updated quilt patch, not as bare edits, or the package build will diverge from the patch stack.
 
 ## Build
 

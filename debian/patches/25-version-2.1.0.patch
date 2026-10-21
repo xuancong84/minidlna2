@@ -30,7 +30,7 @@ Last-Update: 2026-10-21
  patches that let it run without a media database:
  
  | Patch | What it changes |
-@@ -118,18 +118,18 @@ Build in a copy so the build artifacts s
+@@ -118,34 +118,42 @@ Build in a copy so the build artifacts s
  
  ```sh
  mkdir -p ~/build
@@ -53,7 +53,24 @@ Last-Update: 2026-10-21
  
  The source tree has the quilt patches in `debian/patches/` already applied.
  To change upstream files, record the change in a patch:
-@@ -145,7 +145,7 @@ quilt refresh -p ab --no-timestamps --no
+ 
+ ```sh
+ export QUILT_PATCHES=debian/patches
+-quilt new 20-my-change.patch && quilt add file.c   # before editing
++quilt new 26-my-change.patch && quilt add file.c   # before editing
+ # ... edit ...
+ quilt refresh -p ab --no-timestamps --no-index
+ ```
+ 
++quilt keeps its state in `.pc/`, which is not in git. In a fresh clone,
++rebuild it once before using quilt (building packages doesn't need it):
++
++```sh
++for p in $(tac debian/patches/series); do patch -R -p1 -s < debian/patches/$p; done
++QUILT_PATCHES=debian/patches quilt push -a
++```
++
+ ## Install
  
  ```sh
  cd ~/build
