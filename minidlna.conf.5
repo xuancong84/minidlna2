@@ -134,6 +134,19 @@ keeps the default:
 Extensions without a built-in tag reader are probed with libavformat. Pictures
 other than JPEG are served as they are, without resized versions.
 
+.IP "\fBsort_transliteration\fP"
+Without \fBdb_dir\fP: how names are transliterated for sorting (folders first,
+then a natural sort, so ep2 comes before ep10). \fBpinyin\fP (the default)
+gives Chinese its context-aware pinyin from \fBpinyin_dict\fP and treats
+everything else like \fBunidecode\fP; \fBicu\fP uses ICU's transliterator and
+is several times slower; \fBunidecode\fP sorts like Python
+natsorted(key=unidecode(t).lower()). Keys are cached, so each name is
+transliterated once.
+
+.IP "\fBpinyin_dict\fP"
+The gzipped dictionary of \fBsort_transliteration=pinyin\fP, by default
+/usr/share/minidlna/pinyin-dict.txt.gz.
+
 .IP "\fBprobe_limit\fP"
 Without \fBdb_dir\fP: a folder with at most this many media files (default 30)
 has them probed while the client waits; larger folders are not. Played files

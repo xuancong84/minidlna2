@@ -1,3 +1,16 @@
+minidlna (2.2.0-1) noble; urgency=medium
+
+  * Live folders sort folders first, then by a natural sort (ep2 before
+    ep10) of the names transliterated to ASCII (patch 26).
+  * sort_transliteration: pinyin (default; context-aware pinyin from
+    pinyin-dict.txt, generated from MIT pinyin-data/phrase-pinyin-data and
+    installed gzipped), icu (ICU transliterator) or unidecode (same order
+    as Python natsorted(key=unidecode(t).lower())); keys are cached
+    (patch 27). Build-Depends on libicu-dev and zlib1g-dev.
+  * Report version 2.2.0 (patch 28).
+
+ -- xuancong <xuancong.wang@moht.com.sg>  Wed, 21 Oct 2026 19:21:07 +0800
+
 minidlna (2.1.0-1) noble; urgency=medium
 
   * Live folders learn metadata on demand, kept in memory: small folders

@@ -68,6 +68,8 @@ enum upnpconfigoptions {
 	VIDEO_EXTENSIONS,		/* file extensions treated as video */
 	AUDIO_EXTENSIONS,		/* file extensions treated as audio */
 	IMAGE_EXTENSIONS,		/* file extensions treated as images */
+	SORT_TRANSLITERATION,		/* live folders: icu, pinyin or unidecode sort keys */
+	PINYIN_DICT,			/* dictionary of sort_transliteration=pinyin */
 #ifdef THUMBNAIL_CREATION
 	ENABLE_THUMB,                   /* enable thumbnail generation */
 	THUMB_WIDTH,                    /* thunbnail image with */

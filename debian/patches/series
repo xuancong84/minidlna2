@@ -16,3 +16,6 @@
 23-opus-mka-m4b-png-webp.patch
 24-dont-stall-browsing-on-probes.patch
 25-version-2.1.0.patch
+26-transliterated-natural-sort.patch
+27-icu-and-pinyin-sort-keys.patch
+28-version-2.2.0.patch

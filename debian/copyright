@@ -75,6 +75,25 @@ Files: log.? tagutils/* po/*
 Copyright: 2008-2010, NETGEAR Inc.
 License: GPL-2+
 
+Files: unidecode_table.c tools/gen-unidecode-table.py
+Copyright: 2001, Sean M. Burke <sburke@cpan.org>
+           2008-2023, Tomaz Solc <tomaz.solc@tablix.org>
+           2026, xuancong <xuancong.wang@moht.com.sg>
+License: GPL-2+
+Comment: unidecode_table.c is generated from the data of Python's Unidecode
+ (itself derived from Perl's Text::Unidecode) by tools/gen-unidecode-table.py.
+
+Files: pinyin-dict.txt tools/gen-pinyin-dict.py
+Copyright: 2016-2025, mozillazg <mozillazg123@gmail.com>
+           2026, xuancong <xuancong.wang@moht.com.sg>
+License: Expat
+Comment: pinyin-dict.txt is generated from pinyin-data and phrase-pinyin-data
+ (https://github.com/mozillazg) by tools/gen-pinyin-dict.py.
+
+Files: fsbrowse.? fsmeta.? natsort.?
+Copyright: 2026, xuancong <xuancong.wang@moht.com.sg>
+License: GPL-2
+
 Files: icons.c debian/extra/openlogo-nd.svg
 Copyright: 1999, Software in the Public Interest
 License: Expat

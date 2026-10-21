@@ -50,6 +50,7 @@ struct fs_object {
 
 struct fs_entry {
 	char *name;             /* file name, or media_dir basename for tops */
+	char *key;              /* sort key: the name transliterated to lowercase ASCII */
 	short idx;              /* media_dir index */
 	unsigned char is_dir;
 	unsigned char top;      /* entry is a media_dir itself ("F<i>") */

@@ -14,7 +14,7 @@
 # License along with MiniDLNA; if not, write to the Free Software
 # Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307
 # USA.
-AC_INIT([MiniDLNA],[2.1.0],[],[minidlna],[http://sourceforge.net/projects/minidlna/])
+AC_INIT([MiniDLNA],[2.2.0],[],[minidlna],[http://sourceforge.net/projects/minidlna/])
 #LT_INIT
 
 AC_CANONICAL_TARGET
@@ -657,6 +657,19 @@ AC_ARG_ENABLE(thumbnail,
                 AC_MSG_RESULT([no])
         ]
 )
+
+################################################################################################################
+### Sort keys of live folders: zlib to read the gzipped pinyin dictionary (the default), and ICU's transliterator
+PKG_CHECK_MODULES([ICU], [icu-i18n icu-uc],
+	[AC_DEFINE([HAVE_ICU], [1], [Define to 1 to transliterate sort keys with ICU])],
+	[AC_MSG_WARN([ICU not found: sort_transliteration=icu will fall back to unidecode])])
+AC_SUBST([ICU_CFLAGS])
+AC_SUBST([ICU_LIBS])
+AC_CHECK_HEADER([zlib.h],
+	[AC_CHECK_LIB([z], [gzopen],
+		[ZLIB_LIBS="-lz"; AC_DEFINE([HAVE_ZLIB], [1], [Define to 1 if zlib is available])])])
+AC_SUBST([ZLIB_LIBS])
+test -n "$ZLIB_LIBS" || AC_MSG_WARN([zlib not found: sort_transliteration=pinyin will fall back to unidecode])
 
 case "$target_os" in
 	darwin*)

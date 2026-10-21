@@ -95,6 +95,7 @@
 #include "monitor.h"
 #include "fsbrowse.h"
 #include "fsmeta.h"
+#include "natsort.h"
 #include "libav.h"
 #include "log.h"
 #include "tivo_beacon.h"
@@ -584,6 +585,7 @@ init(int argc, char **argv)
 	int bad_option = 0;
 	int port_set = 0, uuid_set = 0, name_set = 0, thumb_set = 0;
 	const char *video_ext = NULL, *audio_ext = NULL, *image_ext = NULL;
+	const char *sort_translit = "pinyin", *pinyin_dict = PKGDATADIR "/pinyin-dict.txt.gz";
 	int port_pidfile_name;
 	const char *default_pidfile = pidfilename;
 	int verbose_flag = 0;
@@ -957,6 +959,12 @@ init(int argc, char **argv)
 		case IMAGE_EXTENSIONS:
 			image_ext = ary_options[i].value;
 			break;
+		case SORT_TRANSLITERATION:
+			sort_translit = ary_options[i].value;
+			break;
+		case PINYIN_DICT:
+			pinyin_dict = ary_options[i].value;
+			break;
 #ifdef THUMBNAIL_CREATION
 		case ENABLE_THUMB:
 			if( (strcmp(ary_options[i].value, "yes") == 0) || atoi(ary_options[i].value) )
@@ -1262,6 +1270,8 @@ init(int argc, char **argv)
 	if (fs_mode())
 	{
 		DPRINTF(E_WARN, L_GENERAL, "No db_dir set: live folder mode, no media database\n");
+		sort_translit = sort_keys_init(sort_translit, pinyin_dict);
+		DPRINTF(E_INFO, L_GENERAL, "Sorting folders with %s transliteration\n", sort_translit);
 		/* Nothing to keep up to date */
 		CLEARFLAG(INOTIFY_MASK);
 		if (GETFLAG(RESCAN_MASK))
@@ -1442,8 +1452,6 @@ main(int argc, char **argv)
 
 	if (fs_mode())
 	{
-		/* Listings are sorted like the scanner's alphasort() */
-		setlocale(LC_COLLATE, "");
 		/* Learns metadata of opened folders and played files */
 		fsmeta_start();
 	}

@@ -35,6 +35,7 @@
 #include "upnpglobalvars.h"
 #include "fsbrowse.h"
 #include "utils.h"
+#include "natsort.h"
 #include "log.h"
 
 static const struct {
@@ -428,8 +429,12 @@ add_entry(struct fs_listing *list, const char *name, int idx, int is_dir, int to
 	}
 	ents = &list->ents[list->count];
 	ents->name = strdup(name);
-	if (!ents->name)
+	ents->key = ents->name ? sort_key(name) : NULL;
+	if (!ents->key)
+	{
+		free(ents->name);
 		return -1;
+	}
 	ents->idx = idx;
 	ents->is_dir = is_dir;
 	ents->top = top;
@@ -524,9 +529,14 @@ cmp_entries(const void *a, const void *b)
 	const struct fs_entry *x = a, *y = b;
 	int ret;
 
+	/* Folders first, then the order of Python's
+	 * natsorted(names, key=lambda t: unidecode(t).lower()) */
 	if (x->is_dir != y->is_dir)
 		return y->is_dir - x->is_dir;
-	ret = strcoll(x->name, y->name);
+	ret = natcmp(x->key, y->key);
+	if (ret)
+		return ret;
+	ret = strcmp(x->name, y->name);
 	if (ret)
 		return ret;
 
@@ -604,7 +614,10 @@ fs_free_listing(struct fs_listing *list)
 	int i;
 
 	for (i = 0; i < list->count; i++)
+	{
 		free(list->ents[i].name);
+		free(list->ents[i].key);
+	}
 	free(list->ents);
 	if (list->dfd)
 	{

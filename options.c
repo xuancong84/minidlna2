@@ -73,6 +73,8 @@ static const struct {
 	{ VIDEO_EXTENSIONS, "video_extensions" },
 	{ AUDIO_EXTENSIONS, "audio_extensions" },
 	{ IMAGE_EXTENSIONS, "image_extensions" },
+	{ SORT_TRANSLITERATION, "sort_transliteration" },
+	{ PINYIN_DICT, "pinyin_dict" },
 #ifdef THUMBNAIL_CREATION
 	{ ENABLE_THUMB, "enable_thumbnail" },
 	{ THUMB_WIDTH, "thumbnail_width" },

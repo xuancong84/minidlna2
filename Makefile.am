@@ -15,7 +15,8 @@
 # Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307
 # USA.
 
-AM_CFLAGS = -Wall -D_LARGEFILE_SOURCE -D_FILE_OFFSET_BITS=64
+AM_CFLAGS = -Wall -D_LARGEFILE_SOURCE -D_FILE_OFFSET_BITS=64 @ICU_CFLAGS@
+AM_CPPFLAGS = -DPKGDATADIR=\"$(pkgdatadir)\"
 
 SUBDIRS=po
 
@@ -28,7 +29,8 @@ minidlnad_SOURCES = minidlna.c upnphttp.c upnpdescgen.c upnpsoap.c \
 			sql.c utils.c metadata.c scanner.c monitor.c \
 			tivo_utils.c tivo_beacon.c tivo_commands.c \
 			playlist.c image_utils.c albumart.c log.c \
-			containers.c avahi.c fsbrowse.c fsmeta.c tagutils/tagutils.c
+			containers.c avahi.c fsbrowse.c fsmeta.c natsort.c \
+			unidecode_table.c tagutils/tagutils.c
 
 if HAVE_KQUEUE
 minidlnad_SOURCES += kqueue.c monitor_kqueue.c
@@ -62,7 +64,8 @@ minidlnad_LDADD = \
 	@LIBEXIF_LIBS@ \
 	@LIBINTL@ \
 	@LIBICONV@ \
-	-lFLAC $(flacogglibs) $(vorbislibs) $(avahilibs)  @LIBFFMPEGTHUMBNAILER_LIBS@
+	-lFLAC $(flacogglibs) $(vorbislibs) $(avahilibs)  @LIBFFMPEGTHUMBNAILER_LIBS@ \
+	@ICU_LIBS@ @ZLIB_LIBS@
 
 testupnpdescgen_SOURCES = testupnpdescgen.c upnpdescgen.c
 testupnpdescgen_LDADD = \
@@ -84,9 +87,14 @@ GENERATED_FILES = \
 TEMPLATES = \
 	linux/minidlna.init.d.script.tmpl
 
-CLEANFILES = $(GENERATED_FILES)
+CLEANFILES = $(GENERATED_FILES) pinyin-dict.txt.gz
+
+# Dictionary of sort_transliteration=pinyin, kept as text in the source
+pkgdata_DATA = pinyin-dict.txt.gz
+pinyin-dict.txt.gz: pinyin-dict.txt
+	gzip -9nc $< > $@
 
 ACLOCAL_AMFLAGS = -I m4
 
-EXTRA_DIST = m4/ChangeLog $(TEMPLATES)
+EXTRA_DIST = m4/ChangeLog $(TEMPLATES) pinyin-dict.txt tools/gen-pinyin-dict.py tools/gen-unidecode-table.py
 noinst_DATA = $(GENERATED_FILES)

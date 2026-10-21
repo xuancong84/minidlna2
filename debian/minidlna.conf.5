@@ -216,6 +216,26 @@ used; clients find the server through SSDP discovery whatever its port.
 Instances not on 8200 also get a UUID and a default
 .Cm friendly_name
 that include the port, so clients see them as separate servers.
+.It Cm sort_transliteration
+Without
+.Cm db_dir :
+how names are transliterated for sorting (folders first, then a natural sort,
+so ep2 comes before ep10).
+.Dq pinyin
+(the default) gives Chinese its context-aware pinyin from
+.Cm pinyin_dict
+and treats everything else like
+.Dq unidecode ;
+.Dq icu
+uses ICU's transliterator and is several times slower;
+.Dq unidecode
+sorts like Python natsorted(key=unidecode(t).lower()). Keys are cached, so
+each name is transliterated once.
+.It Cm pinyin_dict
+The gzipped dictionary of
+.Cm sort_transliteration Ns = Ns Dq pinyin ,
+by default
+.Pa /usr/share/minidlna/pinyin-dict.txt.gz .
 .It Cm probe_limit
 Without
 .Cm db_dir :
