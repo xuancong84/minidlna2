@@ -1,10 +1,10 @@
-# MiniDLNA (ReadyMedia) 2.0.0 — live folder edition
+# MiniDLNA (ReadyMedia) 2.1.0 — live folder edition
 
 This is the world's best-performance DLNA server that can handle giant media folder (e.g., 20TB), many thousands of files and nested folders within a single folder, giant media files (e.g., 8K VR videos), dynamic changes in folders/files, and fast program start-up.
 
 MiniDLNA is a UPnP-A/V and DLNA media server: it shares video, music and
 pictures with players on your network (VLC, Kodi, smart TVs, phones,
-consoles). Version 2.0.0 is the Debian `minidlna` 1.3.3 source package with local
+consoles). Version 2.1.0 is the Debian `minidlna` 1.3.3 source package with local
 patches that let it run without a media database:
 
 | Patch | What it changes |
@@ -13,6 +13,8 @@ patches that let it run without a media database:
 | `17-defaults-run-as-invoking-user.patch` | `root_container=B` by default; empty `user=`/`db_dir=` accepted; per-user log and pid files for unprivileged runs. The package no longer creates a `minidlna` system user. |
 | `18-cmdline-options-and-cwd-media-dir.patch` | Every config option can be given as `--option=value`; without `-f` no config file is read and the current directory is served; `wide_links=yes` by default. |
 | `21-auto-http-port.patch` | Without a port setting, the first free port from 8200 is used; per-port pid file, UUID and default name, so several instances can run side by side. |
+| `22-lazy-metadata-for-live-folders.patch` | Live folders learn durations, resolutions, tags and thumbnails for small folders and played files, and item counts for opened folders, in memory. |
+| `23-opus-mka-m4b-png-webp.patch` | Adds `.opus`, `.mka`, `.m4b`, `.png` and `.webp`, and makes the video/audio/image extension lists configurable. |
 
 ## Original README
 
@@ -62,13 +64,28 @@ In this tree the licence files are `COPYING` (GPL v2) and
   reads that one folder and `stat()`s only the page of entries the client
   asked for. A folder with 20,000 entries answers in milliseconds once it
   is in the page cache, and Linux OS does all the file caching.
-- Clients see your folder tree. Files are typed by extension (no media
-  probing), with size and date; `.srt`/`.smi` subtitles and `cover.jpg`
-  style art next to the files are served.
-- Not available: search, Artist/Album/Genre views, thumbnails, durations,
-  DLNA profile names, resume bookmarks and TiVo. Some TVs show no duration
-  or cannot seek without them, and Xbox 360/Windows Media Player rely on
-  search.
+- Clients see your folder tree. Files are typed by extension, with size and
+  date; `.srt`/`.smi` subtitles and `cover.jpg` style art next to the files
+  are served.
+- Details are learned only where they are cheap, and kept in memory:
+  - **Small folders** (at most `probe_limit`=30 media files): each file is
+    probed for duration, resolution, bitrate, DLNA profile and tags while
+    the client waits, for at most `probe_time`=500 ms; anything left is
+    finished in the background and shows the next time. Waiting is limited
+    to a tenth of the time overall: VLC opens every subfolder of a folder it
+    shows, and those bursts must not hold up other requests.
+  - **Large folders**: nothing is probed; only the names and the page of
+    sizes are read.
+  - **Played files**: probed in the background on first play, and a video
+    gets a thumbnail (a frame, or its embedded cover). Once probed, its
+    exact DLNA profile is sent with the stream, which helps TVs seek.
+  - **Opened folders**: remember their number of entries, shown by clients
+    the next time the parent folder is listed.
+  - Everything is checked against the file's size and modification time
+    (a folder's modification time), so changed files are re-probed and
+    changed folders recounted. Nothing survives a restart.
+- Not available: search, Artist/Album/Genre views, resume bookmarks and
+  TiVo. Xbox 360/Windows Media Player rely on search.
 
 **Database mode** (`db_dir=/var/cache/minidlna`)
 - The original behaviour: all media is scanned into SQLite on start-up and
@@ -101,18 +118,18 @@ Build in a copy so the build artifacts stay out of the source tree:
 
 ```sh
 mkdir -p ~/build
-rsync -a --exclude CLAUDE.md ./ ~/build/minidlna-2.0.0/
-cd ~/build/minidlna-2.0.0
+rsync -a --exclude CLAUDE.md ./ ~/build/minidlna-2.1.0/
+cd ~/build/minidlna-2.1.0
 dpkg-buildpackage -us -uc -b
 ls ../minidlna_*.deb
 ```
 
 The package version comes from the top entry of `debian/changelog`
-(currently `2.0.0-1`, which apt treats as newer than Ubuntu's 1.3.3). For a
+(currently `2.1.0-1`, which apt treats as newer than Ubuntu's 1.3.3). For a
 new release add an entry there, e.g. `dch -v 2.0.1-1 "..."` (package
 `devscripts`), and change `AC_INIT` in `configure.ac` and `MINIDLNA_VERSION`
 in `upnpglobalvars.h` to match. Only binary packages (`-b`) can be built:
-a source package would need a `minidlna_2.0.0.orig.tar.*` tarball.
+a source package would need a `minidlna_2.1.0.orig.tar.*` tarball.
 
 The source tree has the quilt patches in `debian/patches/` already applied.
 To change upstream files, record the change in a patch:
@@ -128,7 +145,7 @@ quilt refresh -p ab --no-timestamps --no-index
 
 ```sh
 cd ~/build
-sudo apt install ./minidlna_2.0.0-1_amd64.deb
+sudo apt install ./minidlna_2.1.0-1_amd64.deb
 sudo apt-mark hold minidlna        # keep apt upgrade from replacing it
 ```
 
@@ -222,6 +239,12 @@ and minidlnad exits if it is busy.
 | `root_container` | `B` | folder tree; only matters in database mode |
 | `wide_links` | `yes` | follow symlinks that point outside `media_dir` |
 | `inotify` | `yes` | database mode only |
+| `probe_limit` | `30` | live folders: probe folders with at most this many media files while browsing; `0` = never |
+| `probe_time` | `500` | live folders: milliseconds a browse may wait for probing |
+| `enable_thumbnail` | `yes` (live folders), `no` (database) | video thumbnails; live folders only make them for played files and small folders |
+| `video_extensions` | `mpg/mpeg/avi/divx/xvid/asf/wmv/mp4/m4v/mts/m2ts/m2t/ts/vob/mkv/webm/flv/mov/3gp/rm/rmvb` | `/` or `,` separated, case-insensitive; replaces the list |
+| `audio_extensions` | `mp3/flac/fla/flc/wma/asf/m4a/m4b/aac/mp4/m4p/wav/ogg/opus/mka/pcm/3gp/dsf/dff` | extensions without a built-in tag reader are probed with libavformat |
+| `image_extensions` | `jpg/jpeg/png/webp` | only JPEG gets resized versions |
 | `port` | first free from `8200` | a set port is used exactly; the service sets `8200` |
 | `network_interface` | all | interface names, comma separated |
 
@@ -236,7 +259,8 @@ See `man minidlna.conf` and `man minidlnad` for every option.
   (covers instances that stepped past 8200).
   Wi-Fi "AP isolation" or guest networks block discovery.
 - **A folder is empty on the client.** The user minidlna runs as must be
-  able to read the folder and every parent directory. Only audio, video
-  and JPEG files with known extensions are listed.
+  able to read the folder and every parent directory. Only files whose
+  extension is in `video_extensions`, `audio_extensions` or
+  `image_extensions` are listed (see below).
 - **Two servers show up as one.** Instances with an explicit `--uuid` must
   each use a different one.

@@ -53,9 +53,12 @@ Path to the directory
 .Nm minidlnad
 should use to store its database and album art cache.
 If it is not set, no database is built: each folder is read from disk when a
-client browses it, and only file names, sizes and dates are reported.
-Search, the Artist/Album/Genre views, thumbnails, durations, bookmarks and
-TiVo support need a database.
+client browses it. Durations, resolutions, tags and thumbnails are learned
+only for small folders
+.Pq see Cm probe_limit
+and played files, and kept in memory.
+Search, the Artist/Album/Genre views, bookmarks and TiVo support need a
+database.
 .It Cm enable_tivo
 Support for streaming .jpg and .mp3 files to a TiVo supporting HMO. Set to
 .Dq yes
@@ -213,6 +216,24 @@ used; clients find the server through SSDP discovery whatever its port.
 Instances not on 8200 also get a UUID and a default
 .Cm friendly_name
 that include the port, so clients see them as separate servers.
+.It Cm probe_limit
+Without
+.Cm db_dir :
+a folder with at most this many media files
+.Pq default 30
+has them probed (duration, resolution, DLNA profile, tags) while the client
+waits; larger folders are not. Played files are always probed in the
+background, and opened folders remember their number of entries. 0 disables
+probing while browsing.
+.It Cm probe_time
+Without
+.Cm db_dir :
+the longest a browse waits for probing, in milliseconds
+.Pq default 500 .
+Whatever isn't done by then is finished in the background and shows the next
+time the folder is opened. Waiting is limited to a tenth of the time overall,
+so a burst of browses (VLC opens every subfolder of the folder it shows) never
+stalls the server.
 .It Cm presentation_url
 Define the URL presented to clients
 .Pq e.g. Dq http://example.com:80 .
@@ -285,6 +306,23 @@ per-user ones under
 .Pa ~/.local/state )
 and
 .Ev XDG_RUNTIME_DIR .
+.It Cm video_extensions , Cm audio_extensions , Cm image_extensions
+File extensions served as video, audio and pictures, matched
+case-insensitively and separated by
+.Ql /
+or
+.Ql \&, .
+Setting one replaces its whole list; an empty value keeps the default:
+.Bl -tag -width "video:" -compact
+.It video:
+mpg/\:mpeg/\:avi/\:divx/\:xvid/\:asf/\:wmv/\:mp4/\:m4v/\:mts/\:m2ts/\:m2t/\:ts/\:vob/\:mkv/\:webm/\:flv/\:mov/\:3gp/\:rm/\:rmvb
+.It audio:
+mp3/\:flac/\:fla/\:flc/\:wma/\:asf/\:m4a/\:m4b/\:aac/\:mp4/\:m4p/\:wav/\:ogg/\:opus/\:mka/\:pcm/\:3gp/\:dsf/\:dff
+.It image:
+jpg/jpeg/png/webp
+.El
+Extensions without a built-in tag reader are probed with libavformat.
+Pictures other than JPEG are served as they are, without resized versions.
 .It Cm uuid
 Specify device's UPnP UUID minidlna should use. By default MAC address is used to build uniq UUID.
 .It Cm wide_links
@@ -303,6 +341,12 @@ to disable subtitles support for unknown clients.
 Set to
 .Dq yes
 to enable thumbnails generation for video files.  To use this option, thumbnail generation must be enable at compile time. See the following options to set thumbnails parameters.
+When
+.Cm db_dir
+is empty this defaults to
+.Dq yes ,
+and only played videos and videos in small folders get a thumbnail, made in
+the background and kept in memory.
 .It Cm thumbnail_width
 The width of the thumbnail image in pixels. Large images takes more time to generate. The default width is 160.
 .It Cm thumbnail_quality

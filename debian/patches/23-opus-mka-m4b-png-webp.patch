@@ -1,0 +1,564 @@
+Description: Serve .opus, .mka, .m4b, .png and .webp; configurable extensions
+ The video, audio and image extension lists behind is_video(), is_audio()
+ and is_image() can now be replaced with video_extensions=,
+ audio_extensions= and image_extensions= ('/' or ',' separated,
+ case-insensitive; an empty value keeps the built-in list). The audio list
+ gains .opus, .mka and .m4b, the image list .png and .webp.
+ .
+ Audio files without a built-in tag reader (.opus, .mka, or anything added
+ to audio_extensions) are read with libavformat: duration, bitrate, sample
+ rate, channels, tags and an attached cover. .m4b uses the MP4 reader.
+ Non-JPEG pictures get their size from libavformat, PNG the PNG_LRG
+ profile, and they are served as they are: resized versions and EXIF
+ thumbnails are only advertised for JPEG.
+Forwarded: no
+Last-Update: 2026-10-21
+--- a/fsbrowse.c
++++ b/fsbrowse.c
+@@ -23,6 +23,7 @@
+ #include <stdlib.h>
+ #include <string.h>
+ #include <strings.h>
++#include <ctype.h>
+ #include <errno.h>
+ #include <fcntl.h>
+ #include <unistd.h>
+@@ -63,6 +64,7 @@ static const struct {
+ 	{ "ogg", "audio/ogg" },
+ 	{ "pcm", "audio/L16" },
+ 	{ "dsf", "audio/x-dsd" }, { "dff", "audio/x-dsd" },
++	{ "opus", "audio/ogg" }, { "mka", "audio/x-matroska" }, { "m4b", "audio/mp4" },
+ 	{ NULL, NULL }
+ };
+ 
+@@ -362,7 +364,18 @@ fs_mime(const char *name, media_types ty
+ 
+ 	if (mtype == TYPE_IMAGE && (types & TYPE_IMAGE))
+ 	{
+-		mime = "image/jpeg";
++		static char image_mime[32];
++
++		if (strcasecmp(ext, "jpg") == 0 || strcasecmp(ext, "jpeg") == 0)
++			mime = "image/jpeg";
++		else
++		{
++			/* image/png, image/webp, or whatever image_extensions adds */
++			snprintf(image_mime, sizeof(image_mime), "image/%s", ext);
++			for (i = 6; image_mime[i]; i++)
++				image_mime[i] = tolower((unsigned char)image_mime[i]);
++			mime = image_mime;
++		}
+ 		cls = "item.imageItem.photo";
+ 	}
+ 	else if (mtype == TYPE_VIDEO && (types & TYPE_VIDEO))
+--- a/metadata.c
++++ b/metadata.c
+@@ -351,6 +351,80 @@ GetFolderMetadata(const char *name, cons
+ 	return ret;
+ }
+ 
++static char *
++lav_tag(AVFormatContext *ctx, AVStream *s, const char *key)
++{
++	AVDictionaryEntry *e = av_dict_get(ctx->metadata, key, NULL, 0);
++
++	/* Ogg (Opus, Vorbis) keeps its tags on the stream */
++	if( !e && s )
++		e = av_dict_get(s->metadata, key, NULL, 0);
++
++	return (e && e->value && *e->value) ? strdup(e->value) : NULL;
++}
++
++/* readtags() for formats without a tag reader of our own */
++static int
++lav_readtags(const char *path, struct song_metadata *song)
++{
++	AVFormatContext *ctx = NULL;
++	AVStream *astream = NULL;
++	uint8_t *pic = NULL;
++	int pic_size = 0;
++	char *s;
++	unsigned int i;
++
++	memset(song, 0, sizeof(*song));
++	if( lav_open(&ctx, path) != 0 )
++		return -1;
++	for( i = 0; i < ctx->nb_streams; i++ )
++	{
++		if( lav_codec_type(ctx->streams[i]) == AVMEDIA_TYPE_AUDIO && !astream )
++			astream = ctx->streams[i];
++		else if( !pic )
++			lav_is_thumbnail_stream(ctx->streams[i], &pic, &pic_size);
++	}
++	if( !astream )
++	{
++		lav_close(ctx);
++		return -1;
++	}
++	if( ctx->duration > 0 )
++		song->song_length = ctx->duration / (AV_TIME_BASE / 1000);
++	song->bitrate = ctx->bit_rate > 0 ? ctx->bit_rate : lav_bit_rate(astream);
++	song->samplerate = lav_sample_rate(astream);
++	song->channels = lav_channels(astream);
++	song->title = lav_tag(ctx, astream, "title");
++	song->album = lav_tag(ctx, astream, "album");
++	song->genre = lav_tag(ctx, astream, "genre");
++	song->comment = lav_tag(ctx, astream, "comment");
++	song->contributor[ROLE_ARTIST] = lav_tag(ctx, astream, "artist");
++	song->contributor[ROLE_ALBUMARTIST] = lav_tag(ctx, astream, "album_artist");
++	if( (s = lav_tag(ctx, astream, "date")) )
++	{
++		song->year = atoi(s);
++		free(s);
++	}
++	if( (s = lav_tag(ctx, astream, "track")) )
++	{
++		song->track = atoi(s);
++		free(s);
++	}
++	if( (s = lav_tag(ctx, astream, "disc")) )
++	{
++		song->disc = atoi(s);
++		free(s);
++	}
++	if( pic && pic_size > 0 && (song->image = malloc(pic_size)) )
++	{
++		memcpy(song->image, pic, pic_size);
++		song->image_size = pic_size;
++	}
++	lav_close(ctx);
++
++	return 0;
++}
++
+ /* With info, fill it and leave the database alone; otherwise insert into
+  * DETAILS and return the new row id */
+ static int64_t
+@@ -377,7 +451,8 @@ audio_metadata(const char *path, const c
+ 		m.mime = strdup("audio/mpeg");
+ 	}
+ 	else if( ends_with(path, ".m4a") || ends_with(path, ".mp4") ||
+-	         ends_with(path, ".aac") || ends_with(path, ".m4p") )
++	         ends_with(path, ".aac") || ends_with(path, ".m4p") ||
++	         ends_with(path, ".m4b") )
+ 	{
+ 		strcpy(type, "aac");
+ 		m.mime = strdup("audio/mp4");
+@@ -424,8 +499,11 @@ audio_metadata(const char *path, const c
+ 	}
+ 	else
+ 	{
+-		DPRINTF(E_WARN, L_METADATA, "Unhandled file extension on %s\n", path);
+-		return 0;
++		/* No tag reader of our own (e.g. .opus, .mka, or an extension
++		 * added with audio_extensions): ask libavformat */
++		strcpy(type, "lav");
++		m.mime = strdup(ends_with(path, ".opus") ? "audio/ogg" :
++		                ends_with(path, ".mka") ? "audio/x-matroska" : "audio/mpeg");
+ 	}
+ 
+ 	if( !(*lang) )
+@@ -436,7 +514,8 @@ audio_metadata(const char *path, const c
+ 			strncpyt(lang, getenv("LANG"), sizeof(lang));
+ 	}
+ 
+-	if( readtags((char *)path, &song, &file, lang, type) != 0 )
++	if( (strcmp(type, "lav") == 0 ? lav_readtags(path, &song) :
++	                                 readtags((char *)path, &song, &file, lang, type)) != 0 )
+ 	{
+ 		DPRINTF(E_WARN, L_METADATA, "Cannot extract tags from %s!\n", path);
+ 		freetags(&song);
+@@ -620,7 +699,33 @@ image_metadata(const char *path, const c
+ 		return 0;
+ 	//DEBUG DPRINTF(E_DEBUG, L_METADATA, " * size: %jd\n", file.st_size);
+ 
+-	/* MIME hard-coded to JPEG for now, until we add PNG support */
++	/* PNG, WebP or an extension added with image_extensions: there is no
++	 * EXIF to read, and libavformat knows the size */
++	if( !ends_with(path, ".jpg") && !ends_with(path, ".jpeg") )
++	{
++		AVFormatContext *ctx = NULL;
++		const char *ext = strrchr(path, '.');
++		unsigned int i;
++
++		xasprintf(&m.mime, "image/%s", ext ? ext + 1 : "unknown");
++		for( i = 6; m.mime[i]; i++ )
++			m.mime[i] = tolower((unsigned char)m.mime[i]);
++		if( lav_open(&ctx, path) == 0 )
++		{
++			for( i = 0; i < ctx->nb_streams; i++ )
++			{
++				if( lav_codec_type(ctx->streams[i]) == AVMEDIA_TYPE_VIDEO )
++				{
++					width = lav_width(ctx->streams[i]);
++					height = lav_height(ctx->streams[i]);
++					break;
++				}
++			}
++			lav_close(ctx);
++		}
++		goto have_size;
++	}
++
+ 	m.mime = strdup("image/jpeg");
+ 
+ 	l = exif_loader_new();
+@@ -730,12 +835,20 @@ no_exifdata:
+ 	}
+ 	//DEBUG DPRINTF(E_DEBUG, L_METADATA, " * resolution: %dx%d\n", width, height);
+ 
++have_size:
+ 	if( !width || !height )
+ 	{
+ 		free_metadata(&m, free_flags);
+ 		return 0;
+ 	}
+-	if( width <= 640 && height <= 480 )
++	if( strcmp(m.mime, "image/jpeg") != 0 )
++	{
++		/* DLNA has no profile for WebP and other formats */
++		if( strcmp(m.mime, "image/png") == 0 &&
++		    ((width <= 4096 && height <= 4096) || !GETFLAG(DLNA_STRICT_MASK)) )
++			m.dlna_pn = strdup("PNG_LRG");
++	}
++	else if( width <= 640 && height <= 480 )
+ 		m.dlna_pn = strdup("JPEG_SM");
+ 	else if( width <= 1024 && height <= 768 )
+ 		m.dlna_pn = strdup("JPEG_MED");
+--- a/minidlna.c
++++ b/minidlna.c
+@@ -579,6 +579,7 @@ init(int argc, char **argv)
+ 	int default_log = 0;
+ 	int bad_option = 0;
+ 	int port_set = 0, uuid_set = 0, name_set = 0, thumb_set = 0;
++	const char *video_ext = NULL, *audio_ext = NULL, *image_ext = NULL;
+ 	int port_pidfile_name;
+ 	const char *default_pidfile = pidfilename;
+ 	int verbose_flag = 0;
+@@ -943,6 +944,15 @@ init(int argc, char **argv)
+ 		case PROBE_TIME:
+ 			runtime_vars.probe_time = atoi(ary_options[i].value);
+ 			break;
++		case VIDEO_EXTENSIONS:
++			video_ext = ary_options[i].value;
++			break;
++		case AUDIO_EXTENSIONS:
++			audio_ext = ary_options[i].value;
++			break;
++		case IMAGE_EXTENSIONS:
++			image_ext = ary_options[i].value;
++			break;
+ #ifdef THUMBNAIL_CREATION
+ 		case ENABLE_THUMB:
+ 			if( (strcmp(ary_options[i].value, "yes") == 0) || atoi(ary_options[i].value) )
+@@ -977,6 +987,12 @@ init(int argc, char **argv)
+ 				optionsfile ? optionsfile : "(command line)");
+ 		}
+ 	}
++	/* Set all three now, so the probing thread never sets them up lazily;
++	 * an empty value keeps the built-in list */
++	set_media_extensions(TYPE_VIDEO, (video_ext && *video_ext) ? video_ext : default_media_extensions(TYPE_VIDEO));
++	set_media_extensions(TYPE_AUDIO, (audio_ext && *audio_ext) ? audio_ext : default_media_extensions(TYPE_AUDIO));
++	set_media_extensions(TYPE_IMAGE, (image_ext && *image_ext) ? image_ext : default_media_extensions(TYPE_IMAGE));
++
+ 	if (!log_path[0])
+ 	{
+ 		strncpyt(log_path, DEFAULT_LOG_PATH, sizeof(log_path));
+--- a/minidlna.conf
++++ b/minidlna.conf
+@@ -107,6 +107,12 @@ wide_links=yes
+ # note: when db_dir is empty the default is yes (only played videos and videos in small folders get one)
+ #enable_thumbnail=no
+ 
++# file extensions served as video, audio and pictures (case-insensitive, '/' or ',' separated);
++# setting one replaces its whole list, an empty value keeps the default shown here
++#video_extensions=mpg/mpeg/avi/divx/xvid/asf/wmv/mp4/m4v/mts/m2ts/m2t/ts/vob/mkv/webm/flv/mov/3gp/rm/rmvb
++#audio_extensions=mp3/flac/fla/flc/wma/asf/m4a/m4b/aac/mp4/m4p/wav/ogg/opus/mka/pcm/3gp/dsf/dff
++#image_extensions=jpg/jpeg/png/webp
++
+ # when db_dir is empty: folders with at most this many media files are probed (duration, resolution,
+ # DLNA profile, tags) while the client waits; larger folders are not. 0 = never probe while browsing
+ #probe_limit=30
+--- a/minidlna.conf.5
++++ b/minidlna.conf.5
+@@ -122,6 +122,18 @@ small folders (see \fBprobe_limit\fP) an
+ Search, the Artist/Album/Genre views, bookmarks and TiVo support need a
+ database.
+ 
++.IP "\fBvideo_extensions\fP, \fBaudio_extensions\fP, \fBimage_extensions\fP"
++File extensions served as video, audio and pictures, matched case-insensitively
++and separated by '/' or ','. Setting one replaces its whole list; an empty value
++keeps the default:
++.nf
++ video: mpg/mpeg/avi/divx/xvid/asf/wmv/mp4/m4v/mts/m2ts/m2t/ts/vob/mkv/webm/flv/mov/3gp/rm/rmvb
++ audio: mp3/flac/fla/flc/wma/asf/m4a/m4b/aac/mp4/m4p/wav/ogg/opus/mka/pcm/3gp/dsf/dff
++ image: jpg/jpeg/png/webp
++.fi
++Extensions without a built-in tag reader are probed with libavformat. Pictures
++other than JPEG are served as they are, without resized versions.
++
+ .IP "\fBprobe_limit\fP"
+ Without \fBdb_dir\fP: a folder with at most this many media files (default 30)
+ has them probed while the client waits; larger folders are not. Played files
+--- a/options.c
++++ b/options.c
+@@ -70,6 +70,9 @@ static const struct {
+ 	{ ENABLE_SUBTITLES, "enable_subtitles" },
+ 	{ PROBE_LIMIT, "probe_limit" },
+ 	{ PROBE_TIME, "probe_time" },
++	{ VIDEO_EXTENSIONS, "video_extensions" },
++	{ AUDIO_EXTENSIONS, "audio_extensions" },
++	{ IMAGE_EXTENSIONS, "image_extensions" },
+ #ifdef THUMBNAIL_CREATION
+ 	{ ENABLE_THUMB, "enable_thumbnail" },
+ 	{ THUMB_WIDTH, "thumbnail_width" },
+--- a/options.h
++++ b/options.h
+@@ -65,6 +65,9 @@ enum upnpconfigoptions {
+ 	ENABLE_SUBTITLES,		/* Enable generic subtitle support for all clients by default */
+ 	PROBE_LIMIT,			/* live folders: probe items of folders with up to this many media files */
+ 	PROBE_TIME,			/* live folders: milliseconds a browse may wait for probing */
++	VIDEO_EXTENSIONS,		/* file extensions treated as video */
++	AUDIO_EXTENSIONS,		/* file extensions treated as audio */
++	IMAGE_EXTENSIONS,		/* file extensions treated as images */
+ #ifdef THUMBNAIL_CREATION
+ 	ENABLE_THUMB,                   /* enable thumbnail generation */
+ 	THUMB_WIDTH,                    /* thunbnail image with */
+--- a/README.md
++++ b/README.md
+@@ -14,6 +14,7 @@ patches that let it run without a media
+ | `18-cmdline-options-and-cwd-media-dir.patch` | Every config option can be given as `--option=value`; without `-f` no config file is read and the current directory is served; `wide_links=yes` by default. |
+ | `21-auto-http-port.patch` | Without a port setting, the first free port from 8200 is used; per-port pid file, UUID and default name, so several instances can run side by side. |
+ | `22-lazy-metadata-for-live-folders.patch` | Live folders learn durations, resolutions, tags and thumbnails for small folders and played files, and item counts for opened folders, in memory. |
++| `23-opus-mka-m4b-png-webp.patch` | Adds `.opus`, `.mka`, `.m4b`, `.png` and `.webp`, and makes the video/audio/image extension lists configurable. |
+ 
+ ## Original README
+ 
+@@ -239,6 +240,9 @@ and minidlnad exits if it is busy.
+ | `probe_limit` | `30` | live folders: probe folders with at most this many media files while browsing; `0` = never |
+ | `probe_time` | `500` | live folders: milliseconds a browse may wait for probing |
+ | `enable_thumbnail` | `yes` (live folders), `no` (database) | video thumbnails; live folders only make them for played files and small folders |
++| `video_extensions` | `mpg/mpeg/avi/divx/xvid/asf/wmv/mp4/m4v/mts/m2ts/m2t/ts/vob/mkv/webm/flv/mov/3gp/rm/rmvb` | `/` or `,` separated, case-insensitive; replaces the list |
++| `audio_extensions` | `mp3/flac/fla/flc/wma/asf/m4a/m4b/aac/mp4/m4p/wav/ogg/opus/mka/pcm/3gp/dsf/dff` | extensions without a built-in tag reader are probed with libavformat |
++| `image_extensions` | `jpg/jpeg/png/webp` | only JPEG gets resized versions |
+ | `port` | first free from `8200` | a set port is used exactly; the service sets `8200` |
+ | `network_interface` | all | interface names, comma separated |
+ 
+@@ -253,7 +257,8 @@ See `man minidlna.conf` and `man minidln
+   (covers instances that stepped past 8200).
+   Wi-Fi "AP isolation" or guest networks block discovery.
+ - **A folder is empty on the client.** The user minidlna runs as must be
+-  able to read the folder and every parent directory. Only audio, video
+-  and JPEG files with known extensions are listed.
++  able to read the folder and every parent directory. Only files whose
++  extension is in `video_extensions`, `audio_extensions` or
++  `image_extensions` are listed (see below).
+ - **Two servers show up as one.** Instances with an explicit `--uuid` must
+   each use a different one.
+--- a/upnpsoap.c
++++ b/upnpsoap.c
+@@ -1089,7 +1089,8 @@ callback(void *args, int argc, char **ar
+ 			ext = mime_to_ext(mime);
+ 			add_res(size, duration, bitrate, sampleFrequency, nrAudioChannels,
+ 			        resolution, dlna_buf, mime, detailID, ext, passed_args);
+-			if( *mime == 'i' ) {
++			/* Only JPEG can be scaled or has an EXIF thumbnail */
++			if( strcmp(mime, "image/jpeg") == 0 ) {
+ 				int srcw = 0, srch = 0;
+ 				if( resolution && (sscanf(resolution, "%6dx%6d", &srcw, &srch) == 2) )
+ 				{
+@@ -1230,8 +1231,11 @@ callback(void *args, int argc, char **ar
+ 			if( passed_args->client == EMediaRoom && !album )
+ 				ret = strcatf(str, "&lt;upnp:album&gt;%s&lt;/upnp:album&gt;", "[No Keywords]");
+ 
++			/* Only JPEG can be scaled or has an EXIF thumbnail */
++			if( strcmp(mime, "image/jpeg") != 0 )
++				;
+ 			/* EVA2000 doesn't seem to handle embedded thumbnails */
+-			if( !(passed_args->flags & FLAG_RESIZE_THUMBS) && NON_ZERO(tn) && IS_ZERO(rotate) ) {
++			else if( !(passed_args->flags & FLAG_RESIZE_THUMBS) && NON_ZERO(tn) && IS_ZERO(rotate) ) {
+ 				ret = strcatf(str, "&lt;upnp:albumArtURI&gt;"
+ 				                   "http://%s:%d/Thumbnails/%s.jpg"
+ 				                   "&lt;/upnp:albumArtURI&gt;",
+--- a/utils.c
++++ b/utils.c
+@@ -349,6 +349,10 @@ mime_to_ext(const char * mime)
+ 				return "ogg";
+ 			else if( strcmp(mime+6, "x-dsd") == 0 )
+ 				return "dsd";
++			else if( strcmp(mime+6, "ogg") == 0 )
++				return "ogg";
++			else if( strcmp(mime+6, "x-matroska") == 0 )
++				return "mka";
+ 			break;
+ 		case 'v':
+ 			if( strcmp(mime+6, "avi") == 0 )
+@@ -383,6 +387,8 @@ mime_to_ext(const char * mime)
+ 				return "jpg";
+ 			else if( strcmp(mime+6, "png") == 0 )
+ 				return "png";
++			else if( strcmp(mime+6, "webp") == 0 )
++				return "webp";
+ 			break;
+ 		default:
+ 			break;
+@@ -390,42 +396,124 @@ mime_to_ext(const char * mime)
+ 	return "dat";
+ }
+ 
++/* Media file extensions, matched case-insensitively. The defaults can be
++ * replaced with video_extensions=, audio_extensions= and image_extensions=. */
++#define MAX_EXTENSIONS 128
++
++static const char default_video_ext[] =
++	"mpg/mpeg/avi/divx/xvid/asf/wmv/mp4/m4v/mts/m2ts/m2t/ts/vob/mkv/webm/"
++#ifdef TIVO_SUPPORT
++	"TiVo/"
++#endif
++	"flv/mov/3gp/rm/rmvb";
++static const char default_audio_ext[] =
++	"mp3/flac/fla/flc/wma/asf/m4a/m4b/aac/mp4/m4p/wav/ogg/opus/mka/pcm/3gp/dsf/dff";
++static const char default_image_ext[] =
++	"jpg/jpeg/png/webp";
++
++struct ext_list {
++	char *buf;			/* the list, split in place */
++	const char *ext[MAX_EXTENSIONS];
++	int n;
++};
++
++static struct ext_list video_ext, audio_ext, image_ext;
++
++/* Split "mkv/.mp4, avi" into extensions without dots */
++static int
++parse_extensions(struct ext_list *l, const char *list)
++{
++	char *buf, *word, *saveptr = NULL;
++
++	if (!(buf = strdup(list)))
++		return -1;
++	free(l->buf);
++	l->buf = buf;
++	l->n = 0;
++	for (word = strtok_r(buf, "/, \t", &saveptr); word; word = strtok_r(NULL, "/, \t", &saveptr))
++	{
++		while (*word == '.')
++			word++;
++		if (*word && l->n < MAX_EXTENSIONS)
++			l->ext[l->n++] = word;
++	}
++
++	return l->n;
++}
++
++static struct ext_list *
++ext_list_for(media_types type, const char **def)
++{
++	switch (type)
++	{
++	case TYPE_VIDEO:
++		*def = default_video_ext;
++		return &video_ext;
++	case TYPE_AUDIO:
++		*def = default_audio_ext;
++		return &audio_ext;
++	case TYPE_IMAGE:
++		*def = default_image_ext;
++		return &image_ext;
++	default:
++		return NULL;
++	}
++}
++
++int
++set_media_extensions(media_types type, const char *list)
++{
++	const char *def;
++	struct ext_list *l = ext_list_for(type, &def);
++
++	return l ? parse_extensions(l, list) : -1;
++}
++
++const char *
++default_media_extensions(media_types type)
++{
++	const char *def = NULL;
++
++	ext_list_for(type, &def);
++	return def;
++}
++
++static int
++has_extension(media_types type, const char *file)
++{
++	const char *def, *dot = strrchr(file, '.');
++	struct ext_list *l = ext_list_for(type, &def);
++	int i;
++
++	if (!dot || !l)
++		return 0;
++	if (!l->buf)
++		parse_extensions(l, def);
++	for (i = 0; i < l->n; i++)
++	{
++		if (strcasecmp(dot + 1, l->ext[i]) == 0)
++			return 1;
++	}
++
++	return 0;
++}
++
+ int
+ is_video(const char * file)
+ {
+-	return (ends_with(file, ".mpg") || ends_with(file, ".mpeg")  ||
+-		ends_with(file, ".avi") || ends_with(file, ".divx")  ||
+-		ends_with(file, ".asf") || ends_with(file, ".wmv")   ||
+-		ends_with(file, ".mp4") || ends_with(file, ".m4v")   ||
+-		ends_with(file, ".mts") || ends_with(file, ".m2ts")  ||
+-		ends_with(file, ".m2t") || ends_with(file, ".mkv")   ||
+-		ends_with(file, ".vob") || ends_with(file, ".ts")    ||
+-		ends_with(file, ".flv") || ends_with(file, ".xvid")  ||
+-#ifdef TIVO_SUPPORT
+-		ends_with(file, ".TiVo") ||
+-#endif
+-		ends_with(file, ".mov") || ends_with(file, ".3gp") ||
+-		ends_with(file, ".rm") || ends_with(file, ".rmvb") ||
+-		ends_with(file, ".webm"));
++	return has_extension(TYPE_VIDEO, file);
+ }
+ 
+ int
+ is_audio(const char * file)
+ {
+-	return (ends_with(file, ".mp3") || ends_with(file, ".flac") ||
+-		ends_with(file, ".wma") || ends_with(file, ".asf")  ||
+-		ends_with(file, ".fla") || ends_with(file, ".flc")  ||
+-		ends_with(file, ".m4a") || ends_with(file, ".aac")  ||
+-		ends_with(file, ".mp4") || ends_with(file, ".m4p")  ||
+-		ends_with(file, ".wav") || ends_with(file, ".ogg")  ||
+-		ends_with(file, ".pcm") || ends_with(file, ".3gp")  ||
+-		ends_with(file, ".dsf") || ends_with(file, ".dff"));
++	return has_extension(TYPE_AUDIO, file);
+ }
+ 
+ int
+ is_image(const char * file)
+ {
+-	return (ends_with(file, ".jpg") || ends_with(file, ".jpeg"));
++	return has_extension(TYPE_IMAGE, file);
+ }
+ 
+ int
+--- a/utils.h
++++ b/utils.h
+@@ -87,6 +87,9 @@ char *strip_ext(char *name);
+ int is_video(const char * file);
+ int is_audio(const char * file);
+ int is_image(const char * file);
++/* Replace the extensions is_video()/is_audio()/is_image() accept, e.g. "mkv/mp4" */
++int set_media_extensions(media_types type, const char *list);
++const char *default_media_extensions(media_types type);
+ int is_playlist(const char * file);
+ int is_caption(const char * file);
+ #define is_nfo(file) ends_with(file, ".nfo")

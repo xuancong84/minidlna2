@@ -51,6 +51,8 @@ struct runtime_vars_s {
 	int max_connections;	/* max number of simultaneous conenctions */
 	const char *root_container;	/* root ObjectID (instead of "0") */
 	const char *ifaces[MAX_LAN_ADDR];	/* list of configured network interfaces */
+	int probe_limit;	/* live folders: probe while browsing up to this many media files */
+	int probe_time;	/* live folders: ms a browse may wait for probing */
 #ifdef THUMBNAIL_CREATION
 	int thumb_width;
 	int thumb_quality;

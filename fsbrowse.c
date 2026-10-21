@@ -23,6 +23,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -63,6 +64,7 @@ static const struct {
 	{ "ogg", "audio/ogg" },
 	{ "pcm", "audio/L16" },
 	{ "dsf", "audio/x-dsd" }, { "dff", "audio/x-dsd" },
+	{ "opus", "audio/ogg" }, { "mka", "audio/x-matroska" }, { "m4b", "audio/mp4" },
 	{ NULL, NULL }
 };
 
@@ -362,7 +364,18 @@ fs_mime(const char *name, media_types types, const char **class)
 
 	if (mtype == TYPE_IMAGE && (types & TYPE_IMAGE))
 	{
-		mime = "image/jpeg";
+		static char image_mime[32];
+
+		if (strcasecmp(ext, "jpg") == 0 || strcasecmp(ext, "jpeg") == 0)
+			mime = "image/jpeg";
+		else
+		{
+			/* image/png, image/webp, or whatever image_extensions adds */
+			snprintf(image_mime, sizeof(image_mime), "image/%s", ext);
+			for (i = 6; image_mime[i]; i++)
+				image_mime[i] = tolower((unsigned char)image_mime[i]);
+			mime = image_mime;
+		}
 		cls = "item.imageItem.photo";
 	}
 	else if (mtype == TYPE_VIDEO && (types & TYPE_VIDEO))
@@ -562,6 +575,27 @@ fs_list(const struct fs_object *obj, struct fs_listing *list)
 		qsort(list->ents, list->count, sizeof(*list->ents), cmp_entries);
 
 	return 0;
+}
+
+/* Absolute path of a listed entry */
+int
+fs_entry_path(const struct fs_object *obj, const struct fs_entry *e, char *buf, size_t len)
+{
+	struct media_dir_s *media_dir = media_dir_at(e->idx);
+	const char *dir;
+	int ret;
+
+	if (!media_dir)
+		return -1;
+	if (e->top)
+		ret = snprintf(buf, len, "%s", media_dir->path);
+	else
+	{
+		dir = (obj->idx < 0) ? media_dir->path : obj->path;
+		ret = snprintf(buf, len, "%s%s%s", dir, strcmp(dir, "/") ? "/" : "", e->name);
+	}
+
+	return (ret < 0 || (size_t)ret >= len) ? -1 : 0;
 }
 
 void

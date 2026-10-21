@@ -12,3 +12,7 @@
 19-readme-md.patch
 20-version-2.0.0.patch
 21-auto-http-port.patch
+22-lazy-metadata-for-live-folders.patch
+23-opus-mka-m4b-png-webp.patch
+24-dont-stall-browsing-on-probes.patch
+25-version-2.1.0.patch

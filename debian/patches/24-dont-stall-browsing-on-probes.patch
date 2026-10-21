@@ -1,0 +1,334 @@
+Description: Don't let VLC's request bursts stall browsing
+ VLC for Android, when it shows a folder, lists every subfolder and fetches
+ every advertised cover. Live folders advertised a cover URL for every
+ folder (looked up only when fetched), so right after a restart VLC opened
+ dozens of connections at once, each needing an uncached directory lookup.
+ Requests are served one at a time and the listen backlog was 16: the
+ kernel dropped connections (TcpExtListenDrops), VLC's own request to open
+ the folder the user tapped was among them, and its SYN retries back off to
+ a minute or more ("Loading" forever).
+ .
+  - listen() backlog is SOMAXCONN, so bursts wait in line instead of being
+    dropped.
+  - A folder gets a cover URL only once it is known to hold a cover file:
+    listing a folder reveals that for free, and it is remembered next to
+    its entry count (both checked against the folder's mtime).
+  - Browses wait for probes out of a credit that refills at a tenth of real
+    time (capped at probe_time), so a burst of subfolder listings barely
+    waits while a single tap still gets the full probe_time; probes for a
+    played or selected file jump the queue.
+ .
+ On a Raspberry Pi 4 with 245 subfolders: no dropped connections under a
+ 48-way cover flood, the subfolder pass takes 5.7 s instead of 68.8 s, and
+ opening a folder meanwhile takes 0.02 s.
+Forwarded: no
+Last-Update: 2026-10-21
+--- a/fsmeta.c
++++ b/fsmeta.c
+@@ -60,6 +60,7 @@ struct entry {
+ 	time_t mtime;
+ 	int is_dir;
+ 	int count;			/* folders: number of entries, -1 unknown */
++	int has_art;			/* folders: contain a cover file */
+ 	int probed;			/* files: 1 probed, -1 failed, 0 not yet */
+ 	int thumb_tried;
+ 	struct media_info info;		/* never holds art; see thumb */
+@@ -280,6 +281,26 @@ push(struct queue *q, const char *path,
+ 	return j;
+ }
+ 
++/* Put a job first in its queue, queued already or not */
++static void
++move_to_front(struct queue *q, struct job *j)
++{
++	struct job **p = &q->head, *prev = NULL;
++
++	while (*p && *p != j)
++	{
++		prev = *p;
++		p = &(*p)->next;
++	}
++	if (!*p || q->head == j)
++		return;
++	*p = j->next;
++	if (q->tail == j)
++		q->tail = prev;
++	j->next = q->head;
++	q->head = j;
++}
++
+ static struct job *
+ pop(struct queue *q)
+ {
+@@ -316,6 +337,9 @@ fsmeta_request(const char *path, const s
+ 			ticket = j->ticket;
+ 		else if ((j = push(&probe_q, path, types, next_ticket + 1)))
+ 			ticket = ++next_ticket;
++		/* A played or selected file shouldn't wait behind a folder's worth */
++		if (j && (what & FSMETA_URGENT))
++			move_to_front(&probe_q, j);
+ 	}
+ 	if ((what & FSMETA_THUMB) && can_make_video_thumb(path, types) &&
+ 	    !(ok && (e->thumb || e->thumb_tried)) && !queued(&thumb_q, path))
+@@ -394,7 +418,7 @@ fsmeta_get_thumb(const char *path, const
+ }
+ 
+ void
+-fsmeta_set_count(const char *path, time_t mtime, int count)
++fsmeta_set_count(const char *path, time_t mtime, int count, int has_art)
+ {
+ 	struct entry *e;
+ 
+@@ -408,20 +432,27 @@ fsmeta_set_count(const char *path, time_
+ 		e->is_dir = 1;
+ 		e->mtime = mtime;
+ 		e->count = count;
++		e->has_art = has_art;
+ 	}
+ 	pthread_mutex_unlock(&lock);
+ }
+ 
+ int
+-fsmeta_get_count(const char *path, time_t mtime)
++fsmeta_get_count(const char *path, time_t mtime, int *has_art)
+ {
+ 	struct entry *e;
+ 	int count = -1;
+ 
++	if (has_art)
++		*has_art = 0;
+ 	pthread_mutex_lock(&lock);
+ 	e = find(path, 0);
+ 	if (e && e->is_dir && e->mtime == mtime)
++	{
+ 		count = e->count;
++		if (has_art)
++			*has_art = e->has_art;
++	}
+ 	pthread_mutex_unlock(&lock);
+ 
+ 	return count;
+@@ -678,9 +709,12 @@ worker(void *arg)
+ 		pthread_mutex_unlock(&lock);
+ 		process(j, thumb_job);
+ 		pthread_mutex_lock(&lock);
++		/* Urgent jobs run out of order, so a waiter may return a little
++		 * early; it only means fewer details in that answer */
+ 		if (!thumb_job)
+ 		{
+-			done_ticket = j->ticket;
++			if (j->ticket > done_ticket)
++				done_ticket = j->ticket;
+ 			pthread_cond_broadcast(&done_cv);
+ 		}
+ 		free(j->path);
+--- a/fsmeta.h
++++ b/fsmeta.h
+@@ -28,6 +28,7 @@
+ /* What fsmeta_request() should make sure of */
+ #define FSMETA_PROBE	0x01	/* duration, resolution, DLNA profile, tags... */
+ #define FSMETA_THUMB	0x02	/* a thumbnail (video frame or embedded cover) */
++#define FSMETA_URGENT	0x04	/* probe before anything already queued */
+ 
+ /* Start/stop the worker thread that does all probing */
+ void fsmeta_start(void);
+@@ -50,9 +51,10 @@ int fsmeta_get(const char *path, const s
+ /* A malloc'ed copy of the thumbnail JPEG, if there is an up-to-date one */
+ int fsmeta_get_thumb(const char *path, const struct stat *st, uint8_t **data, int *size);
+ 
+-/* Number of entries in an opened folder, valid while its mtime is unchanged */
+-void fsmeta_set_count(const char *path, time_t mtime, int count);
+-int fsmeta_get_count(const char *path, time_t mtime);	/* -1 if unknown */
++/* Number of entries in an opened folder and whether it holds a cover file,
++ * valid while its mtime is unchanged */
++void fsmeta_set_count(const char *path, time_t mtime, int count, int has_art);
++int fsmeta_get_count(const char *path, time_t mtime, int *has_art);	/* -1 if unknown */
+ int fsmeta_has_count(const char *path);	/* a count is stored, maybe stale */
+ 
+ #endif
+--- a/minidlna.conf
++++ b/minidlna.conf
+@@ -118,7 +118,8 @@ wide_links=yes
+ #probe_limit=30
+ 
+ # when db_dir is empty: the longest a browse waits for probing, in milliseconds; whatever is not
+-# done by then is finished in the background and shows on the next browse
++# done by then is finished in the background and shows on the next browse. Bursts of browses
++# (e.g. VLC opening every subfolder) only get a tenth of the time, so they never stall the server
+ #probe_time=500
+ 
+ # The width of the thumbnail image. Large images takes more time to generate.  To use this option, thumbnail generation must be enable at compile time.
+--- a/minidlna.conf.5
++++ b/minidlna.conf.5
+@@ -142,6 +142,8 @@ are always probed in the background. 0 d
+ .IP "\fBprobe_time\fP"
+ Without \fBdb_dir\fP: the longest a browse waits for probing, in milliseconds
+ (default 500). The rest is finished in the background and shows next time.
++Waiting is limited to a tenth of the time overall, so a burst of browses (VLC
++opens every subfolder of the folder it shows) never stalls the server.
+ 
+ .IP "\fBlog_dir\fP"
+ Path to the directory where the log file upnp-av.log should be stored, this 
+--- a/README.md
++++ b/README.md
+@@ -71,7 +71,9 @@ In this tree the licence files are `COPY
+   - **Small folders** (at most `probe_limit`=30 media files): each file is
+     probed for duration, resolution, bitrate, DLNA profile and tags while
+     the client waits, for at most `probe_time`=500 ms; anything left is
+-    finished in the background and shows the next time.
++    finished in the background and shows the next time. Waiting is limited
++    to a tenth of the time overall: VLC opens every subfolder of a folder it
++    shows, and those bursts must not hold up other requests.
+   - **Large folders**: nothing is probed; only the names and the page of
+     sizes are read.
+   - **Played files**: probed in the background on first play, and a video
+--- a/upnphttp.c
++++ b/upnphttp.c
+@@ -2087,7 +2087,7 @@ SendResp_dlnafile(struct upnphttp *h, ch
+ 		last_file.dlna[0] = '\0';
+ 		/* A played file is worth learning about (and a thumbnail); once
+ 		 * probed, its exact MIME type and DLNA profile help seeking */
+-		fsmeta_request(obj.path, &obj.st, obj.types, FSMETA_PROBE|FSMETA_THUMB);
++		fsmeta_request(obj.path, &obj.st, obj.types, FSMETA_PROBE|FSMETA_THUMB|FSMETA_URGENT);
+ 		{
+ 			struct media_info info;
+ 
+--- a/upnpsoap.c
++++ b/upnpsoap.c
+@@ -1430,18 +1430,52 @@ fs_send_file(struct Response *args, cons
+ 	return ret;
+ }
+ 
+-/* Entries in a folder, if it was opened before and hasn't changed since */
++/* Entries in a folder and whether it has a cover file, if it was opened
++ * before and hasn't changed since. Folders not opened yet get no cover
++ * URL: advertising one for every folder made clients such as VLC fetch
++ * hundreds of missing covers at once. */
+ static int
+-fs_folder_count(int dfd, const char *name, const char *path)
++fs_folder_count(int dfd, const char *name, const char *path, int *has_art)
+ {
+ 	struct stat st;
+ 
++	*has_art = 0;
+ 	if( !path[0] || !fsmeta_has_count(path) )
+ 		return -1;
+ 	if( (dfd >= 0 ? fstatat(dfd, name, &st, 0) : stat(path, &st)) != 0 )
+ 		return -1;
+ 
+-	return fsmeta_get_count(path, st.st_mtime);
++	return fsmeta_get_count(path, st.st_mtime, has_art);
++}
++
++/* Requests are answered one at a time, so a browse that waits for probes
++ * holds up every client. Clients such as VLC open all subfolders of a
++ * folder in a row; waiting comes out of a credit that refills at a tenth
++ * of real time, so a person tapping into a folder gets the full probe_time
++ * while such a burst barely waits (its probes finish in the background). */
++static void
++fs_wait_probes(unsigned long ticket)
++{
++	static long long credit = -1, last;
++	long long now = fsmeta_now_ms(), end;
++
++	if( !ticket || runtime_vars.probe_time <= 0 )
++		return;
++	if( credit < 0 )
++		credit = runtime_vars.probe_time;
++	else
++		credit += (now - last) / 10;
++	if( credit > runtime_vars.probe_time )
++		credit = runtime_vars.probe_time;
++	last = now;
++	if( credit < 20 )
++		return;
++	fsmeta_wait(ticket, now + credit);
++	end = fsmeta_now_ms();
++	credit -= end - now;
++	if( credit < 0 )
++		credit = 0;
++	last = end;
+ }
+ 
+ static int
+@@ -1476,17 +1510,17 @@ BrowseLiveFolder(struct Response *args,
+ 		name = (name && name[1]) ? name + 1 : obj.path;
+ 		if( S_ISDIR(obj.st.st_mode) )
+ 		{
+-			fs_send_row(args, id, parent, folder, name, NULL, NULL, 1, NULL,
+-			            fsmeta_get_count(obj.path, obj.st.st_mtime));
++			int count = fsmeta_get_count(obj.path, obj.st.st_mtime, &art);
++
++			fs_send_row(args, id, parent, folder, name, NULL, NULL, art, NULL, count);
+ 			return 0;
+ 		}
+ 		mime = fs_mime(name, obj.types, &class);
+ 		if( !mime )
+ 			return -1;
+ 		/* Clients ask about an item just before playing it: learn it now */
+-		t = fsmeta_request(obj.path, &obj.st, obj.types, FSMETA_PROBE|FSMETA_THUMB);
+-		if( t && runtime_vars.probe_time > 0 )
+-			fsmeta_wait(t, fsmeta_now_ms() + runtime_vars.probe_time);
++		t = fsmeta_request(obj.path, &obj.st, obj.types, FSMETA_PROBE|FSMETA_THUMB|FSMETA_URGENT);
++		fs_wait_probes(t);
+ 		art = (*mime != 'i') && fs_find_art(obj.path, 0, buf, sizeof(buf)) == 0;
+ 		captions = (*mime == 'v') && fs_find_caption(obj.path, buf, sizeof(buf)) == 0;
+ 		fs_send_file(args, id, parent, obj.path, name, mime, class, &obj.st, art, captions);
+@@ -1500,7 +1534,7 @@ BrowseLiveFolder(struct Response *args,
+ 	}
+ 	*totalMatches = list.count;
+ 	if( obj.idx >= 0 )
+-		fsmeta_set_count(obj.path, obj.st.st_mtime, list.count);
++		fsmeta_set_count(obj.path, obj.st.st_mtime, list.count, list.has_art);
+ 
+ 	/* Small folders: learn about every media file now, waiting at most
+ 	 * probe_time; large ones are left alone */
+@@ -1519,8 +1553,7 @@ BrowseLiveFolder(struct Response *args,
+ 			if( t )
+ 				ticket = t;
+ 		}
+-		if( ticket && runtime_vars.probe_time > 0 )
+-			fsmeta_wait(ticket, fsmeta_now_ms() + runtime_vars.probe_time);
++		fs_wait_probes(ticket);
+ 	}
+ 
+ 	fs_object_id(parent, sizeof(parent), &obj);
+@@ -1538,17 +1571,18 @@ BrowseLiveFolder(struct Response *args,
+ 		dfd = list.dfd[e->idx];
+ 		if( e->top )
+ 		{
++			int count = fs_folder_count(-1, NULL, buf, &art);
++
+ 			fs_make_id(id, sizeof(id), e->idx, NULL, NULL);
+-			ret = fs_send_row(args, id, "0", folder, e->name, NULL, NULL, 1, NULL,
+-			                  fs_folder_count(-1, NULL, buf));
++			ret = fs_send_row(args, id, "0", folder, e->name, NULL, NULL, art, NULL, count);
+ 			continue;
+ 		}
+ 		fs_make_id(id, sizeof(id), e->idx, obj.idx < 0 ? NULL : obj.rel, e->name);
+ 		if( e->is_dir )
+ 		{
+-			/* Folder art is looked up only if the client asks for it */
+-			ret = fs_send_row(args, id, parent, folder, e->name, NULL, NULL, 1, NULL,
+-			                  fs_folder_count(dfd, e->name, buf));
++			int count = fs_folder_count(dfd, e->name, buf, &art);
++
++			ret = fs_send_row(args, id, parent, folder, e->name, NULL, NULL, art, NULL, count);
+ 			continue;
+ 		}
+ 		mime = fs_mime(e->name, fs_media_types(e->idx), &class);
+--- a/minidlna.c
++++ b/minidlna.c
+@@ -153,7 +153,11 @@ OpenAndConfHTTPSocket(unsigned short por
+ 		return -1;
+ 	}
+ 
+-	if (listen(s, 16) < 0)
++	/* Requests are served one at a time; clients like VLC open dozens of
++	 * connections at once (folder listings plus cover art), and a full
++	 * backlog makes the kernel drop connections, which clients only retry
++	 * after seconds to minutes. Let them wait in line instead. */
++	if (listen(s, SOMAXCONN) < 0)
+ 	{
+ 		DPRINTF(E_ERROR, L_GENERAL, "listen(http): %s\n", strerror(errno));
+ 		close(s);

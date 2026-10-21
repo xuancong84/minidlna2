@@ -67,6 +67,7 @@ struct fs_listing {
 int fs_root_is_flat(void);
 int fs_resolve(const char *id, struct fs_object *obj);
 int fs_list(const struct fs_object *obj, struct fs_listing *list);
+int fs_entry_path(const struct fs_object *obj, const struct fs_entry *e, char *buf, size_t len);
 void fs_free_listing(struct fs_listing *list);
 
 void fs_make_id(char *buf, size_t len, int idx, const char *rel, const char *name);

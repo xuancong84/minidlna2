@@ -100,4 +100,44 @@ GetImageMetadata(const char *path, const char *name);
 int64_t
 GetVideoMetadata(const char *path, const char *name);
 
+/* What a probe learns about one file, for live folder mode. Text fields
+ * are escaped the same way as in the database (ready for DIDL output). */
+struct media_info {
+	char *title;
+	char *creator;
+	char *artist;
+	char *album;
+	char *genre;
+	char *comment;
+	char *date;
+	char *duration;
+	char *resolution;
+	char *dlna_pn;
+	char *mime;
+	unsigned int channels;
+	unsigned int bitrate;
+	unsigned int frequency;
+	unsigned int disc;
+	unsigned int track;
+	unsigned int rotation;
+	int exif_thumb;		/* image has a usable EXIF thumbnail */
+	uint8_t *art;		/* embedded cover / attached picture (JPEG) */
+	int art_size;
+};
+
+/* Probe*Metadata(): fill *info without touching the database.
+ * They share static state, so call them from one thread only.
+ * returns: 1 success, 0 failure */
+int
+ProbeAudioMetadata(const char *path, const char *name, struct media_info *info);
+
+int
+ProbeImageMetadata(const char *path, const char *name, struct media_info *info);
+
+int
+ProbeVideoMetadata(const char *path, const char *name, struct media_info *info);
+
+void
+free_media_info(struct media_info *info);
+
 #endif

@@ -73,6 +73,8 @@
 #include "scanner.h"
 #include "sql.h"
 #include "fsbrowse.h"
+#include "fsmeta.h"
+#include "metadata.h"
 #include "log.h"
 
 #ifdef __sparc__ /* Sorting takes too long on slow processors with very large containers */
@@ -962,8 +964,9 @@ callback(void *args, int argc, char **argv, char **azColName)
 				if( strlen(title) > 23 )
 					title[23] = '\0';
 			}
-			/* Hyundai hack: Only titles with a media extension get recognized. */
-			else if( passed_args->client == EHyundaiTV )
+			/* Hyundai hack: Only titles with a media extension get recognized.
+			 * (Live folder titles are full file names and have one already.) */
+			else if( passed_args->client == EHyundaiTV && !is_video(title) )
 			{
 				ext = mime_to_ext(mime);
 				ret = asprintf(&alt_title, "%s.%s", title, ext);
@@ -1086,7 +1089,8 @@ callback(void *args, int argc, char **argv, char **azColName)
 			ext = mime_to_ext(mime);
 			add_res(size, duration, bitrate, sampleFrequency, nrAudioChannels,
 			        resolution, dlna_buf, mime, detailID, ext, passed_args);
-			if( *mime == 'i' ) {
+			/* Only JPEG can be scaled or has an EXIF thumbnail */
+			if( strcmp(mime, "image/jpeg") == 0 ) {
 				int srcw = 0, srch = 0;
 				if( resolution && (sscanf(resolution, "%6dx%6d", &srcw, &srch) == 2) )
 				{
@@ -1227,8 +1231,11 @@ callback(void *args, int argc, char **argv, char **azColName)
 			if( passed_args->client == EMediaRoom && !album )
 				ret = strcatf(str, "&lt;upnp:album&gt;%s&lt;/upnp:album&gt;", "[No Keywords]");
 
+			/* Only JPEG can be scaled or has an EXIF thumbnail */
+			if( strcmp(mime, "image/jpeg") != 0 )
+				;
 			/* EVA2000 doesn't seem to handle embedded thumbnails */
-			if( !(passed_args->flags & FLAG_RESIZE_THUMBS) && NON_ZERO(tn) && IS_ZERO(rotate) ) {
+			else if( !(passed_args->flags & FLAG_RESIZE_THUMBS) && NON_ZERO(tn) && IS_ZERO(rotate) ) {
 				ret = strcatf(str, "&lt;upnp:albumArtURI&gt;"
 				                   "http://%s:%d/Thumbnails/%s.jpg"
 				                   "&lt;/upnp:albumArtURI&gt;",
@@ -1248,9 +1255,12 @@ callback(void *args, int argc, char **argv, char **azColName)
 		if( passed_args->filter & FILTER_SEARCHABLE ) {
 			ret = strcatf(str, "searchable=\"%d\" ", (fs_mode() || check_magic_container(id, passed_args->flags)) ? 0 : 1);
 		}
-		/* Counting children in live folder mode would cost a readdir per folder */
-		if( (passed_args->filter & FILTER_CHILDCOUNT) && !fs_mode() ) {
-			ret = strcatf(str, "childCount=\"%d\"", get_child_count(id, check_magic_container(id, passed_args->flags)));
+		if( passed_args->filter & FILTER_CHILDCOUNT ) {
+			/* Live folders only know the count of folders opened before */
+			if( !fs_mode() )
+				ret = strcatf(str, "childCount=\"%d\"", get_child_count(id, check_magic_container(id, passed_args->flags)));
+			else if( passed_args->child_count >= 0 )
+				ret = strcatf(str, "childCount=\"%d\"", passed_args->child_count);
 		}
 		/* If the client calls for BrowseMetadata on root, we have to include our "upnp:searchClass"'s, unless they're filtered out */
 		if( passed_args->requested == 1 && strcmp(id, "0") == 0 && (passed_args->filter & FILTER_UPNP_SEARCHCLASS) && !fs_mode() ) {
@@ -1305,13 +1315,16 @@ callback(void *args, int argc, char **argv, char **azColName)
 }
 
 /* Live folder mode: feed one filesystem entry through callback() as if it
- * were a database row, so the DIDL output and client quirks stay shared. */
+ * were a database row, so the DIDL output and client quirks stay shared.
+ * info is what probing learned about the file, or NULL. */
 static int
 fs_send_row(struct Response *args, const char *id, const char *parent, const char *class,
-            const char *name, const char *mime, const struct stat *st, int album_art)
+            const char *name, const char *mime, const struct stat *st, int album_art,
+            const struct media_info *info, int child_count)
 {
 	char *argv[25] = { NULL };
 	char size[24], date[32], mimebuf[64];
+	char bitrate[16], frequency[16], channels[16], track[16], disc[16], rotation[16];
 	char *title;
 	struct tm tm;
 	int ret;
@@ -1319,8 +1332,7 @@ fs_send_row(struct Response *args, const char *id, const char *parent, const cha
 	title = escape_tag(name, 1);
 	if( !title )
 		return 1;
-	if( strncmp(class, "item", 4) == 0 )
-		strip_ext(title);
+	/* Items keep their full file name, extension included */
 	argv[0] = (char *)id;
 	argv[1] = (char *)parent;
 	argv[3] = (char *)id;
@@ -1335,6 +1347,53 @@ fs_send_row(struct Response *args, const char *id, const char *parent, const cha
 		    strftime(date, sizeof(date), "%Y-%m-%dT%H:%M:%S", &tm) )
 			argv[16] = date;
 	}
+	if( info )
+	{
+		argv[7] = info->duration;
+		if( info->bitrate )
+		{
+			snprintf(bitrate, sizeof(bitrate), "%u", info->bitrate);
+			argv[8] = bitrate;
+		}
+		if( info->frequency )
+		{
+			snprintf(frequency, sizeof(frequency), "%u", info->frequency);
+			argv[9] = frequency;
+		}
+		argv[10] = info->artist;
+		argv[11] = info->album;
+		argv[12] = info->genre;
+		argv[13] = info->comment;
+		if( info->channels )
+		{
+			snprintf(channels, sizeof(channels), "%u", info->channels);
+			argv[14] = channels;
+		}
+		if( info->track )
+		{
+			snprintf(track, sizeof(track), "%u", info->track);
+			argv[15] = track;
+		}
+		if( info->date )
+			argv[16] = info->date;
+		argv[17] = info->resolution;
+		if( info->exif_thumb )
+			argv[18] = "1";
+		argv[19] = info->creator;
+		argv[20] = info->dlna_pn;
+		if( info->mime )
+			mime = info->mime;
+		if( info->rotation )
+		{
+			snprintf(rotation, sizeof(rotation), "%u", info->rotation);
+			argv[23] = rotation;
+		}
+		if( info->disc )
+		{
+			snprintf(disc, sizeof(disc), "%u", info->disc);
+			argv[24] = disc;
+		}
+	}
 	if( mime )
 	{
 		strncpyt(mimebuf, mime, sizeof(mimebuf));
@@ -1342,11 +1401,81 @@ fs_send_row(struct Response *args, const char *id, const char *parent, const cha
 	}
 	if( album_art )
 		argv[22] = "1";
+	args->child_count = child_count;
 
 	ret = callback(args, 25, argv, NULL);
 	free(title);
 
 	return ret;
+}
+
+/* A file's row, with whatever has been learned about it so far */
+static int
+fs_send_file(struct Response *args, const char *id, const char *parent, const char *path,
+             const char *name, const char *mime, const char *class, const struct stat *st,
+             int art, int captions)
+{
+	struct media_info info;
+	int probed = 0, thumb = 0, ret;
+
+	memset(&info, 0, sizeof(info));
+	if( st && path[0] )
+		probed = (fsmeta_get(path, st, &info, &thumb) == 1);
+	args->has_captions = captions;
+	/* A thumbnail is shown as album art; photos have their own */
+	ret = fs_send_row(args, id, parent, class, name, mime, st,
+	                  *mime != 'i' && (art || thumb), probed ? &info : NULL, -1);
+	free_media_info(&info);
+
+	return ret;
+}
+
+/* Entries in a folder and whether it has a cover file, if it was opened
+ * before and hasn't changed since. Folders not opened yet get no cover
+ * URL: advertising one for every folder made clients such as VLC fetch
+ * hundreds of missing covers at once. */
+static int
+fs_folder_count(int dfd, const char *name, const char *path, int *has_art)
+{
+	struct stat st;
+
+	*has_art = 0;
+	if( !path[0] || !fsmeta_has_count(path) )
+		return -1;
+	if( (dfd >= 0 ? fstatat(dfd, name, &st, 0) : stat(path, &st)) != 0 )
+		return -1;
+
+	return fsmeta_get_count(path, st.st_mtime, has_art);
+}
+
+/* Requests are answered one at a time, so a browse that waits for probes
+ * holds up every client. Clients such as VLC open all subfolders of a
+ * folder in a row; waiting comes out of a credit that refills at a tenth
+ * of real time, so a person tapping into a folder gets the full probe_time
+ * while such a burst barely waits (its probes finish in the background). */
+static void
+fs_wait_probes(unsigned long ticket)
+{
+	static long long credit = -1, last;
+	long long now = fsmeta_now_ms(), end;
+
+	if( !ticket || runtime_vars.probe_time <= 0 )
+		return;
+	if( credit < 0 )
+		credit = runtime_vars.probe_time;
+	else
+		credit += (now - last) / 10;
+	if( credit > runtime_vars.probe_time )
+		credit = runtime_vars.probe_time;
+	last = now;
+	if( credit < 20 )
+		return;
+	fsmeta_wait(ticket, now + credit);
+	end = fsmeta_now_ms();
+	credit -= end - now;
+	if( credit < 0 )
+		credit = 0;
+	last = end;
 }
 
 static int
@@ -1360,8 +1489,9 @@ BrowseLiveFolder(struct Response *args, const char *ObjectID, int metadata,
 	char buf[PATH_MAX];
 	const char *mime, *class, *name;
 	struct stat st;
+	unsigned long ticket = 0, t;
 	long long end;
-	int i, dfd, art, ret = 0;
+	int i, dfd, art, captions, nmedia, ret = 0;
 
 	if( fs_resolve(ObjectID, &obj) != 0 )
 		return -1;
@@ -1373,22 +1503,27 @@ BrowseLiveFolder(struct Response *args, const char *ObjectID, int metadata,
 		*totalMatches = 1;
 		if( obj.idx < 0 )
 		{
-			fs_send_row(args, id, parent, folder, "root", NULL, NULL, 0);
+			fs_send_row(args, id, parent, folder, "root", NULL, NULL, 0, NULL, -1);
 			return 0;
 		}
 		name = strrchr(obj.path, '/');
 		name = (name && name[1]) ? name + 1 : obj.path;
 		if( S_ISDIR(obj.st.st_mode) )
 		{
-			fs_send_row(args, id, parent, folder, name, NULL, NULL, 1);
+			int count = fsmeta_get_count(obj.path, obj.st.st_mtime, &art);
+
+			fs_send_row(args, id, parent, folder, name, NULL, NULL, art, NULL, count);
 			return 0;
 		}
 		mime = fs_mime(name, obj.types, &class);
 		if( !mime )
 			return -1;
+		/* Clients ask about an item just before playing it: learn it now */
+		t = fsmeta_request(obj.path, &obj.st, obj.types, FSMETA_PROBE|FSMETA_THUMB|FSMETA_URGENT);
+		fs_wait_probes(t);
 		art = (*mime != 'i') && fs_find_art(obj.path, 0, buf, sizeof(buf)) == 0;
-		args->has_captions = (*mime == 'v') && fs_find_caption(obj.path, buf, sizeof(buf)) == 0;
-		fs_send_row(args, id, parent, class, name, mime, &obj.st, art);
+		captions = (*mime == 'v') && fs_find_caption(obj.path, buf, sizeof(buf)) == 0;
+		fs_send_file(args, id, parent, obj.path, name, mime, class, &obj.st, art, captions);
 		return 0;
 	}
 
@@ -1398,6 +1533,29 @@ BrowseLiveFolder(struct Response *args, const char *ObjectID, int metadata,
 		return -1;
 	}
 	*totalMatches = list.count;
+	if( obj.idx >= 0 )
+		fsmeta_set_count(obj.path, obj.st.st_mtime, list.count, list.has_art);
+
+	/* Small folders: learn about every media file now, waiting at most
+	 * probe_time; large ones are left alone */
+	for( i = 0, nmedia = 0; i < list.count; i++ )
+		nmedia += !list.ents[i].is_dir;
+	if( nmedia && nmedia <= runtime_vars.probe_limit )
+	{
+		for( i = 0; i < list.count; i++ )
+		{
+			struct fs_entry *e = &list.ents[i];
+
+			if( e->is_dir || fs_entry_path(&obj, e, buf, sizeof(buf)) != 0 ||
+			    fstatat(list.dfd[e->idx], e->name, &st, 0) != 0 )
+				continue;
+			t = fsmeta_request(buf, &st, fs_media_types(e->idx), FSMETA_PROBE|FSMETA_THUMB);
+			if( t )
+				ticket = t;
+		}
+		fs_wait_probes(ticket);
+	}
+
 	fs_object_id(parent, sizeof(parent), &obj);
 	end = (RequestedCount < 0) ? list.count : (long long)StartingIndex + RequestedCount;
 	if( end > list.count )
@@ -1408,27 +1566,32 @@ BrowseLiveFolder(struct Response *args, const char *ObjectID, int metadata,
 	{
 		struct fs_entry *e = &list.ents[i];
 
+		if( fs_entry_path(&obj, e, buf, sizeof(buf)) != 0 )
+			buf[0] = '\0';
+		dfd = list.dfd[e->idx];
 		if( e->top )
 		{
+			int count = fs_folder_count(-1, NULL, buf, &art);
+
 			fs_make_id(id, sizeof(id), e->idx, NULL, NULL);
-			ret = fs_send_row(args, id, "0", folder, e->name, NULL, NULL, 1);
+			ret = fs_send_row(args, id, "0", folder, e->name, NULL, NULL, art, NULL, count);
 			continue;
 		}
 		fs_make_id(id, sizeof(id), e->idx, obj.idx < 0 ? NULL : obj.rel, e->name);
 		if( e->is_dir )
 		{
-			/* Folder art is looked up only if the client asks for it */
-			ret = fs_send_row(args, id, parent, folder, e->name, NULL, NULL, 1);
+			int count = fs_folder_count(dfd, e->name, buf, &art);
+
+			ret = fs_send_row(args, id, parent, folder, e->name, NULL, NULL, art, NULL, count);
 			continue;
 		}
 		mime = fs_mime(e->name, fs_media_types(e->idx), &class);
 		if( !mime )
 			continue;
-		dfd = list.dfd[e->idx];
 		art = (*mime != 'i') && (list.has_art || fs_has_file_art(dfd, e->name));
-		args->has_captions = (*mime == 'v') && fs_has_captions(dfd, e->name);
-		ret = fs_send_row(args, id, parent, class, e->name, mime,
-		                  fstatat(dfd, e->name, &st, 0) == 0 ? &st : NULL, art);
+		captions = (*mime == 'v') && fs_has_captions(dfd, e->name);
+		ret = fs_send_file(args, id, parent, buf, e->name, mime, class,
+		                   fstatat(dfd, e->name, &st, 0) == 0 ? &st : NULL, art, captions);
 	}
 	fs_free_listing(&list);
 

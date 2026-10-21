@@ -87,6 +87,9 @@ char *strip_ext(char *name);
 int is_video(const char * file);
 int is_audio(const char * file);
 int is_image(const char * file);
+/* Replace the extensions is_video()/is_audio()/is_image() accept, e.g. "mkv/mp4" */
+int set_media_extensions(media_types type, const char *list);
+const char *default_media_extensions(media_types type);
 int is_playlist(const char * file);
 int is_caption(const char * file);
 #define is_nfo(file) ends_with(file, ".nfo")

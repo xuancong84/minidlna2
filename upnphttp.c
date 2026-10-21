@@ -77,6 +77,8 @@
 #include "log.h"
 #include "sql.h"
 #include "fsbrowse.h"
+#include "fsmeta.h"
+#include "metadata.h"
 #include <libexif/exif-loader.h>
 #include "tivo_utils.h"
 #include "tivo_commands.h"
@@ -1543,11 +1545,33 @@ SendResp_albumArt(struct upnphttp * h, char * object)
 		/* "1-<id>.jpg" from DIDL, or "<id>.<ext>?albumArt=true" for MS clients */
 		if( strncmp(object, "1-", 2) == 0 )
 			object += 2;
-		if( fs_url_object(object, &obj) == 0 &&
-		    fs_find_art(obj.path, S_ISDIR(obj.st.st_mode), art, sizeof(art)) == 0 )
-			path = sqlite3_mprintf("%s", art);
-		else
-			path = NULL;
+		path = NULL;
+		if( fs_url_object(object, &obj) == 0 )
+		{
+			uint8_t *thumb;
+			int thumb_size;
+
+			/* Cover files first, then a learned thumbnail (embedded
+			 * cover art or a video frame) */
+			if( fs_find_art(obj.path, S_ISDIR(obj.st.st_mode), art, sizeof(art)) == 0 )
+				path = sqlite3_mprintf("%s", art);
+			else if( S_ISREG(obj.st.st_mode) &&
+			         fsmeta_get_thumb(obj.path, &obj.st, &thumb, &thumb_size) )
+			{
+				DPRINTF(E_INFO, L_HTTP, "Serving thumbnail of %s\n", obj.path);
+				INIT_STR(str, header);
+				start_dlna_header(&str, 200, "Interactive", "image/jpeg");
+				strcatf(&str, "Content-Length: %d\r\n"
+				              "contentFeatures.dlna.org: DLNA.ORG_PN=JPEG_TN\r\n\r\n",
+				              thumb_size);
+				if( send_data(h, str.data, str.off, MSG_MORE) == 0 &&
+				    h->req_command != EHead )
+					send_data(h, (char *)thumb, thumb_size, 0);
+				free(thumb);
+				CloseSocket_upnphttp(h);
+				return;
+			}
+		}
 	}
 	else
 		path = sql_get_text_field(db, "SELECT PATH from ALBUM_ART where ID = '%lld'", id);
@@ -1658,13 +1682,6 @@ SendResp_thumbnail(struct upnphttp * h, char * object)
 	ExifLoader *l;
 	struct string_s str;
 
-	/* Live folder mode never advertises thumbnails */
-	if( fs_mode() )
-	{
-		Send404(h);
-		return;
-	}
-
 	if( h->reqflags & (FLAG_XFERSTREAMING|FLAG_RANGE) )
 	{
 		DPRINTF(E_WARN, L_HTTP, "Client tried to specify transferMode as Streaming with an image!\n");
@@ -1673,7 +1690,20 @@ SendResp_thumbnail(struct upnphttp * h, char * object)
 	}
 
 	id = strtoll(object, NULL, 10);
-	path = sql_get_text_field(db, "SELECT PATH from DETAILS where ID = '%lld'", id);
+	if( fs_mode() )
+	{
+		/* The photo's EXIF thumbnail, read on request */
+		struct fs_object obj;
+		const char *name;
+
+		path = NULL;
+		if( fs_url_object(object, &obj) == 0 && S_ISREG(obj.st.st_mode) &&
+		    (name = strrchr(obj.path, '/')) && is_image(name + 1) &&
+		    (obj.types & TYPE_IMAGE) )
+			path = sqlite3_mprintf("%s", obj.path);
+	}
+	else
+		path = sql_get_text_field(db, "SELECT PATH from DETAILS where ID = '%lld'", id);
 	if( !path )
 	{
 		DPRINTF(E_WARN, L_HTTP, "DETAIL ID %s not found, responding ERROR 404\n", object);
@@ -1744,27 +1774,46 @@ SendResp_resizedimg(struct upnphttp * h, char * object)
 	int scale = 1;
 	const char *tmode;
 
-	/* No resolution is known in live folder mode, so nothing to scale */
-	if( fs_mode() )
-	{
-		Send404(h);
-		return;
-	}
+	char fs_path[PATH_MAX], fs_resolution[32];
 
 	id = strtoll(object, &saveptr, 10);
-	snprintf(buf, sizeof(buf), "SELECT PATH, RESOLUTION, ROTATION from DETAILS where ID = '%lld'", (long long)id);
-	ret = sql_get_table(db, buf, &result, &rows, NULL);
-	if( ret != SQLITE_OK )
+	if( fs_mode() )
 	{
-		Send500(h);
-		return;
+		/* Scaling needs the resolution, known once the photo was probed */
+		struct fs_object obj;
+		struct media_info info;
+
+		result = NULL;
+		memset(&info, 0, sizeof(info));
+		if( fs_url_object(object, &obj) == 0 && S_ISREG(obj.st.st_mode) &&
+		    fsmeta_get(obj.path, &obj.st, &info, NULL) == 1 && info.resolution &&
+		    info.mime && strcmp(info.mime, "image/jpeg") == 0 )
+		{
+			memcpy(fs_path, obj.path, sizeof(fs_path));
+			strncpyt(fs_resolution, info.resolution, sizeof(fs_resolution));
+			file_path = fs_path;
+			resolution = fs_resolution;
+			rotate = info.rotation;
+		}
+		free_media_info(&info);
+		saveptr = strchr(object, '?');
 	}
-	if( rows )
+	else
 	{
-		file_path = result[3];
-		resolution = result[4];
-                if (result[5])
-			rotate = atoi(result[5]);
+		snprintf(buf, sizeof(buf), "SELECT PATH, RESOLUTION, ROTATION from DETAILS where ID = '%lld'", (long long)id);
+		ret = sql_get_table(db, buf, &result, &rows, NULL);
+		if( ret != SQLITE_OK )
+		{
+			Send500(h);
+			return;
+		}
+		if( rows )
+		{
+			file_path = result[3];
+			resolution = result[4];
+			if (result[5])
+				rotate = atoi(result[5]);
+		}
 	}
 	if( !file_path || !resolution || (access(file_path, F_OK) != 0) )
 	{
@@ -1796,7 +1845,8 @@ SendResp_resizedimg(struct upnphttp * h, char * object)
 		else if( strcasecmp(key, "rotation") == 0 )
 		{
 			rotate = (rotate + atoi(val)) % 360;
-			sql_exec(db, "UPDATE DETAILS set ROTATION = %d where ID = %lld", rotate, id);
+			if( !fs_mode() )
+				sql_exec(db, "UPDATE DETAILS set ROTATION = %d where ID = %lld", rotate, id);
 		}
 		else if( strcasecmp(key, "pixelshape") == 0 )
 		{
@@ -2034,9 +2084,25 @@ SendResp_dlnafile(struct upnphttp *h, char *object)
 		last_file.id = 0;
 		last_file.client = ctype;
 		memcpy(last_file.path, obj.path, sizeof(last_file.path));
-		strncpyt(last_file.mime, mime, sizeof(last_file.mime));
-		client_mime_quirks(last_file.mime, cflags, ctype);
 		last_file.dlna[0] = '\0';
+		/* A played file is worth learning about (and a thumbnail); once
+		 * probed, its exact MIME type and DLNA profile help seeking */
+		fsmeta_request(obj.path, &obj.st, obj.types, FSMETA_PROBE|FSMETA_THUMB|FSMETA_URGENT);
+		{
+			struct media_info info;
+
+			memset(&info, 0, sizeof(info));
+			if( fsmeta_get(obj.path, &obj.st, &info, NULL) == 1 )
+			{
+				if( info.mime )
+					mime = info.mime;
+				if( info.dlna_pn )
+					snprintf(last_file.dlna, sizeof(last_file.dlna), "DLNA.ORG_PN=%s;", info.dlna_pn);
+			}
+			strncpyt(last_file.mime, mime, sizeof(last_file.mime));
+			free_media_info(&info);
+		}
+		client_mime_quirks(last_file.mime, cflags, ctype);
 	}
 	else if( cflags & FLAG_MS_PFS )
 	{

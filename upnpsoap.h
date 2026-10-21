@@ -46,6 +46,7 @@ struct Response
 	uint32_t flags;
 	enum client_types client;
 	int has_captions;	/* live folder mode: the current row has a caption file */
+	int child_count;	/* live folder mode: the current folder's entries, -1 unknown */
 };
 
 /* ExecuteSoapAction():

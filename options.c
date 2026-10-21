@@ -68,6 +68,11 @@ static const struct {
 	{ WIDE_LINKS, "wide_links" },
 	{ TIVO_DISCOVERY, "tivo_discovery" },
 	{ ENABLE_SUBTITLES, "enable_subtitles" },
+	{ PROBE_LIMIT, "probe_limit" },
+	{ PROBE_TIME, "probe_time" },
+	{ VIDEO_EXTENSIONS, "video_extensions" },
+	{ AUDIO_EXTENSIONS, "audio_extensions" },
+	{ IMAGE_EXTENSIONS, "image_extensions" },
 #ifdef THUMBNAIL_CREATION
 	{ ENABLE_THUMB, "enable_thumbnail" },
 	{ THUMB_WIDTH, "thumbnail_width" },

@@ -276,6 +276,63 @@ free_metadata(metadata_t *m, uint32_t flags)
 		free(m->resolution);
 }
 
+static char *
+dupstr(const char *s)
+{
+	return s ? strdup(s) : NULL;
+}
+
+/* Copy what was extracted into the caller's media_info (live folder mode) */
+static void
+fill_media_info(struct media_info *info, const metadata_t *m, const char *mime)
+{
+	info->title = dupstr(m->title);
+	info->creator = dupstr(m->creator);
+	info->artist = dupstr(m->artist);
+	info->album = dupstr(m->album);
+	info->genre = dupstr(m->genre);
+	info->comment = dupstr(m->comment);
+	info->date = dupstr(m->date);
+	info->duration = dupstr(m->duration);
+	info->resolution = dupstr(m->resolution);
+	info->dlna_pn = dupstr(m->dlna_pn);
+	info->mime = dupstr(mime ? mime : m->mime);
+	info->channels = m->channels;
+	info->bitrate = m->bitrate;
+	info->frequency = m->frequency;
+	info->disc = m->disc;
+	info->track = m->track;
+	info->rotation = m->rotation;
+}
+
+static void
+copy_art(struct media_info *info, const uint8_t *data, int size)
+{
+	if( data && size > 0 && (info->art = malloc(size)) )
+	{
+		memcpy(info->art, data, size);
+		info->art_size = size;
+	}
+}
+
+void
+free_media_info(struct media_info *info)
+{
+	free(info->title);
+	free(info->creator);
+	free(info->artist);
+	free(info->album);
+	free(info->genre);
+	free(info->comment);
+	free(info->date);
+	free(info->duration);
+	free(info->resolution);
+	free(info->dlna_pn);
+	free(info->mime);
+	free(info->art);
+	memset(info, 0, sizeof(*info));
+}
+
 int64_t
 GetFolderMetadata(const char *name, const char *path, const char *artist, const char *genre, int64_t album_art)
 {
@@ -294,8 +351,84 @@ GetFolderMetadata(const char *name, const char *path, const char *artist, const 
 	return ret;
 }
 
-int64_t
-GetAudioMetadata(const char *path, const char *name)
+static char *
+lav_tag(AVFormatContext *ctx, AVStream *s, const char *key)
+{
+	AVDictionaryEntry *e = av_dict_get(ctx->metadata, key, NULL, 0);
+
+	/* Ogg (Opus, Vorbis) keeps its tags on the stream */
+	if( !e && s )
+		e = av_dict_get(s->metadata, key, NULL, 0);
+
+	return (e && e->value && *e->value) ? strdup(e->value) : NULL;
+}
+
+/* readtags() for formats without a tag reader of our own */
+static int
+lav_readtags(const char *path, struct song_metadata *song)
+{
+	AVFormatContext *ctx = NULL;
+	AVStream *astream = NULL;
+	uint8_t *pic = NULL;
+	int pic_size = 0;
+	char *s;
+	unsigned int i;
+
+	memset(song, 0, sizeof(*song));
+	if( lav_open(&ctx, path) != 0 )
+		return -1;
+	for( i = 0; i < ctx->nb_streams; i++ )
+	{
+		if( lav_codec_type(ctx->streams[i]) == AVMEDIA_TYPE_AUDIO && !astream )
+			astream = ctx->streams[i];
+		else if( !pic )
+			lav_is_thumbnail_stream(ctx->streams[i], &pic, &pic_size);
+	}
+	if( !astream )
+	{
+		lav_close(ctx);
+		return -1;
+	}
+	if( ctx->duration > 0 )
+		song->song_length = ctx->duration / (AV_TIME_BASE / 1000);
+	song->bitrate = ctx->bit_rate > 0 ? ctx->bit_rate : lav_bit_rate(astream);
+	song->samplerate = lav_sample_rate(astream);
+	song->channels = lav_channels(astream);
+	song->title = lav_tag(ctx, astream, "title");
+	song->album = lav_tag(ctx, astream, "album");
+	song->genre = lav_tag(ctx, astream, "genre");
+	song->comment = lav_tag(ctx, astream, "comment");
+	song->contributor[ROLE_ARTIST] = lav_tag(ctx, astream, "artist");
+	song->contributor[ROLE_ALBUMARTIST] = lav_tag(ctx, astream, "album_artist");
+	if( (s = lav_tag(ctx, astream, "date")) )
+	{
+		song->year = atoi(s);
+		free(s);
+	}
+	if( (s = lav_tag(ctx, astream, "track")) )
+	{
+		song->track = atoi(s);
+		free(s);
+	}
+	if( (s = lav_tag(ctx, astream, "disc")) )
+	{
+		song->disc = atoi(s);
+		free(s);
+	}
+	if( pic && pic_size > 0 && (song->image = malloc(pic_size)) )
+	{
+		memcpy(song->image, pic, pic_size);
+		song->image_size = pic_size;
+	}
+	lav_close(ctx);
+
+	return 0;
+}
+
+/* With info, fill it and leave the database alone; otherwise insert into
+ * DETAILS and return the new row id */
+static int64_t
+audio_metadata(const char *path, const char *name, struct media_info *info)
 {
 	char type[4];
 	static char lang[6] = { '\0' };
@@ -318,7 +451,8 @@ GetAudioMetadata(const char *path, const char *name)
 		m.mime = strdup("audio/mpeg");
 	}
 	else if( ends_with(path, ".m4a") || ends_with(path, ".mp4") ||
-	         ends_with(path, ".aac") || ends_with(path, ".m4p") )
+	         ends_with(path, ".aac") || ends_with(path, ".m4p") ||
+	         ends_with(path, ".m4b") )
 	{
 		strcpy(type, "aac");
 		m.mime = strdup("audio/mp4");
@@ -365,8 +499,11 @@ GetAudioMetadata(const char *path, const char *name)
 	}
 	else
 	{
-		DPRINTF(E_WARN, L_METADATA, "Unhandled file extension on %s\n", path);
-		return 0;
+		/* No tag reader of our own (e.g. .opus, .mka, or an extension
+		 * added with audio_extensions): ask libavformat */
+		strcpy(type, "lav");
+		m.mime = strdup(ends_with(path, ".opus") ? "audio/ogg" :
+		                ends_with(path, ".mka") ? "audio/x-matroska" : "audio/mpeg");
 	}
 
 	if( !(*lang) )
@@ -377,7 +514,8 @@ GetAudioMetadata(const char *path, const char *name)
 			strncpyt(lang, getenv("LANG"), sizeof(lang));
 	}
 
-	if( readtags((char *)path, &song, &file, lang, type) != 0 )
+	if( (strcmp(type, "lav") == 0 ? lav_readtags(path, &song) :
+	                                 readtags((char *)path, &song, &file, lang, type)) != 0 )
 	{
 		DPRINTF(E_WARN, L_METADATA, "Cannot extract tags from %s!\n", path);
 		freetags(&song);
@@ -476,6 +614,20 @@ GetAudioMetadata(const char *path, const char *name)
 		}
 	}
 
+	if( info )
+	{
+		fill_media_info(info, &m, song.mime);
+		info->channels = song.channels;
+		info->bitrate = song.bitrate;
+		info->frequency = song.samplerate;
+		info->disc = song.disc;
+		info->track = song.track;
+		copy_art(info, song.image, song.image_size);
+		freetags(&song);
+		free_metadata(&m, free_flags);
+		return 1;
+	}
+
 	album_art = find_album_art(path, song.image, song.image_size);
 
 	ret = sql_exec(db, "INSERT into DETAILS"
@@ -501,6 +653,18 @@ GetAudioMetadata(const char *path, const char *name)
 	return ret;
 }
 
+int64_t
+GetAudioMetadata(const char *path, const char *name)
+{
+	return audio_metadata(path, name, NULL);
+}
+
+int
+ProbeAudioMetadata(const char *path, const char *name, struct media_info *info)
+{
+	return audio_metadata(path, name, info) > 0;
+}
+
 /* For libjpeg error handling */
 static jmp_buf setjmp_buffer;
 static void
@@ -511,8 +675,8 @@ libjpeg_error_handler(j_common_ptr cinfo)
 	return;
 }
 
-int64_t
-GetImageMetadata(const char *path, const char *name)
+static int64_t
+image_metadata(const char *path, const char *name, struct media_info *info)
 {
 	ExifData *ed;
 	ExifEntry *e = NULL;
@@ -535,7 +699,33 @@ GetImageMetadata(const char *path, const char *name)
 		return 0;
 	//DEBUG DPRINTF(E_DEBUG, L_METADATA, " * size: %jd\n", file.st_size);
 
-	/* MIME hard-coded to JPEG for now, until we add PNG support */
+	/* PNG, WebP or an extension added with image_extensions: there is no
+	 * EXIF to read, and libavformat knows the size */
+	if( !ends_with(path, ".jpg") && !ends_with(path, ".jpeg") )
+	{
+		AVFormatContext *ctx = NULL;
+		const char *ext = strrchr(path, '.');
+		unsigned int i;
+
+		xasprintf(&m.mime, "image/%s", ext ? ext + 1 : "unknown");
+		for( i = 6; m.mime[i]; i++ )
+			m.mime[i] = tolower((unsigned char)m.mime[i]);
+		if( lav_open(&ctx, path) == 0 )
+		{
+			for( i = 0; i < ctx->nb_streams; i++ )
+			{
+				if( lav_codec_type(ctx->streams[i]) == AVMEDIA_TYPE_VIDEO )
+				{
+					width = lav_width(ctx->streams[i]);
+					height = lav_height(ctx->streams[i]);
+					break;
+				}
+			}
+			lav_close(ctx);
+		}
+		goto have_size;
+	}
+
 	m.mime = strdup("image/jpeg");
 
 	l = exif_loader_new();
@@ -645,12 +835,20 @@ no_exifdata:
 	}
 	//DEBUG DPRINTF(E_DEBUG, L_METADATA, " * resolution: %dx%d\n", width, height);
 
+have_size:
 	if( !width || !height )
 	{
 		free_metadata(&m, free_flags);
 		return 0;
 	}
-	if( width <= 640 && height <= 480 )
+	if( strcmp(m.mime, "image/jpeg") != 0 )
+	{
+		/* DLNA has no profile for WebP and other formats */
+		if( strcmp(m.mime, "image/png") == 0 &&
+		    ((width <= 4096 && height <= 4096) || !GETFLAG(DLNA_STRICT_MASK)) )
+			m.dlna_pn = strdup("PNG_LRG");
+	}
+	else if( width <= 640 && height <= 480 )
 		m.dlna_pn = strdup("JPEG_SM");
 	else if( width <= 1024 && height <= 768 )
 		m.dlna_pn = strdup("JPEG_MED");
@@ -659,6 +857,14 @@ no_exifdata:
 	xasprintf(&m.resolution, "%dx%d", width, height);
 	m.title = strdup(name);
 	strip_ext(m.title);
+
+	if( info )
+	{
+		fill_media_info(info, &m, NULL);
+		info->exif_thumb = thumb;
+		free_metadata(&m, free_flags);
+		return 1;
+	}
 
 	ret = sql_exec(db, "INSERT into DETAILS"
 	                   " (PATH, TITLE, SIZE, TIMESTAMP, DATE, RESOLUTION,"
@@ -682,7 +888,19 @@ no_exifdata:
 }
 
 int64_t
-GetVideoMetadata(const char *path, const char *name)
+GetImageMetadata(const char *path, const char *name)
+{
+	return image_metadata(path, name, NULL);
+}
+
+int
+ProbeImageMetadata(const char *path, const char *name, struct media_info *info)
+{
+	return image_metadata(path, name, info) > 0;
+}
+
+static int64_t
+video_metadata(const char *path, const char *name, struct media_info *info)
 {
 	struct stat file;
 	int ret, i;
@@ -1587,6 +1805,18 @@ video_no_dlna:
 		}
 	}
 
+	if( info )
+	{
+		fill_media_info(info, &m, NULL);
+		/* The attached picture lives in ctx, so copy it before closing */
+		copy_art(info, m.thumb_data, m.thumb_size);
+		freetags(&video);
+		lav_close(ctx);
+		free_metadata(&m, free_flags);
+		free(path_cpy);
+		return 1;
+	}
+
 	album_art = find_album_art(path, m.thumb_data, m.thumb_size);
 	freetags(&video);
 	lav_close(ctx);
@@ -1614,4 +1844,16 @@ video_no_dlna:
 	free(path_cpy);
 
 	return ret;
+}
+
+int64_t
+GetVideoMetadata(const char *path, const char *name)
+{
+	return video_metadata(path, name, NULL);
+}
+
+int
+ProbeVideoMetadata(const char *path, const char *name, struct media_info *info)
+{
+	return video_metadata(path, name, info) > 0;
 }

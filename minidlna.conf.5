@@ -117,9 +117,33 @@ EG: presentation_url=http://www.mediaserver.lan/index.php
 .IP "\fBdb_dir\fP"
 Where minidlna stores the data files, including Album cache files. If it is
 not set, no database is built: each folder is read from disk when a client
-browses it, and only file names, sizes and dates are reported. Search, the
-Artist/Album/Genre views, thumbnails, durations, bookmarks and TiVo support
-need a database.
+browses it. Durations, resolutions, tags and thumbnails are learned only for
+small folders (see \fBprobe_limit\fP) and played files, and kept in memory.
+Search, the Artist/Album/Genre views, bookmarks and TiVo support need a
+database.
+
+.IP "\fBvideo_extensions\fP, \fBaudio_extensions\fP, \fBimage_extensions\fP"
+File extensions served as video, audio and pictures, matched case-insensitively
+and separated by '/' or ','. Setting one replaces its whole list; an empty value
+keeps the default:
+.nf
+ video: mpg/mpeg/avi/divx/xvid/asf/wmv/mp4/m4v/mts/m2ts/m2t/ts/vob/mkv/webm/flv/mov/3gp/rm/rmvb
+ audio: mp3/flac/fla/flc/wma/asf/m4a/m4b/aac/mp4/m4p/wav/ogg/opus/mka/pcm/3gp/dsf/dff
+ image: jpg/jpeg/png/webp
+.fi
+Extensions without a built-in tag reader are probed with libavformat. Pictures
+other than JPEG are served as they are, without resized versions.
+
+.IP "\fBprobe_limit\fP"
+Without \fBdb_dir\fP: a folder with at most this many media files (default 30)
+has them probed while the client waits; larger folders are not. Played files
+are always probed in the background. 0 disables probing while browsing.
+
+.IP "\fBprobe_time\fP"
+Without \fBdb_dir\fP: the longest a browse waits for probing, in milliseconds
+(default 500). The rest is finished in the background and shows next time.
+Waiting is limited to a tenth of the time overall, so a burst of browses (VLC
+opens every subfolder of the folder it shows) never stalls the server.
 
 .IP "\fBlog_dir\fP"
 Path to the directory where the log file upnp-av.log should be stored, this 

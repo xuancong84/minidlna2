@@ -1,3 +1,18 @@
+minidlna (2.1.0-1) noble; urgency=medium
+
+  * Live folders learn metadata on demand, kept in memory: small folders
+    (probe_limit) are probed while browsing, played files get probed and a
+    video thumbnail, opened folders remember their entry count; titles are
+    full file names (patch 22).
+  * Serve .opus, .mka, .m4b, .png and .webp; video_extensions,
+    audio_extensions and image_extensions are configurable (patch 23).
+  * Fix VLC stalling on "Loading" after a restart: listen backlog is
+    SOMAXCONN, folder covers are only advertised once known, and probing
+    waits are rate-limited (patch 24).
+  * Report version 2.1.0 (patch 25).
+
+ -- xuancong <xuancong.wang@moht.com.sg>  Wed, 21 Oct 2026 17:48:57 +0800
+
 minidlna (2.0.0-1) noble; urgency=medium
 
   * Version 2.0.0, based on Debian minidlna 1.3.3+dfsg-1build2.

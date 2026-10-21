@@ -1,0 +1,1800 @@
+Description: Learn metadata on demand in live folder mode
+ Live folders now learn details where it is cheap, and keep them in memory
+ (an LRU cache in fsmeta.c, checked against each file's size and mtime):
+ .
+  - Folders with at most probe_limit (30) media files have them probed for
+    duration, resolution, bitrate, DLNA profile and tags while the client
+    waits, for at most probe_time (500 ms); the rest finishes in the
+    background. Larger folders are not probed.
+  - A played file is probed in the background and a video gets a thumbnail
+    (a frame via ffmpegthumbnailer, or its embedded cover); once probed its
+    DLNA profile is sent with the stream.
+  - An opened folder remembers its number of entries, reported as
+    childCount while its mtime is unchanged.
+  - Photos with a known resolution get /Resized/ and EXIF /Thumbnails/
+    URLs again.
+ .
+ The metadata extractors in metadata.c are split so Probe*Metadata() fill
+ a struct media_info instead of inserting into the database; database mode
+ is unchanged. They and image_utils.c keep static state, so all probing
+ runs in one worker thread and browses wait for it with tickets.
+ enable_thumbnail defaults to yes in live folder mode, and live folder
+ titles are full file names, extension included.
+Forwarded: no
+Last-Update: 2026-10-21
+--- a/fsbrowse.c
++++ b/fsbrowse.c
+@@ -564,6 +564,27 @@ fs_list(const struct fs_object *obj, str
+ 	return 0;
+ }
+ 
++/* Absolute path of a listed entry */
++int
++fs_entry_path(const struct fs_object *obj, const struct fs_entry *e, char *buf, size_t len)
++{
++	struct media_dir_s *media_dir = media_dir_at(e->idx);
++	const char *dir;
++	int ret;
++
++	if (!media_dir)
++		return -1;
++	if (e->top)
++		ret = snprintf(buf, len, "%s", media_dir->path);
++	else
++	{
++		dir = (obj->idx < 0) ? media_dir->path : obj->path;
++		ret = snprintf(buf, len, "%s%s%s", dir, strcmp(dir, "/") ? "/" : "", e->name);
++	}
++
++	return (ret < 0 || (size_t)ret >= len) ? -1 : 0;
++}
++
+ void
+ fs_free_listing(struct fs_listing *list)
+ {
+--- a/fsbrowse.h
++++ b/fsbrowse.h
+@@ -67,6 +67,7 @@ struct fs_listing {
+ int fs_root_is_flat(void);
+ int fs_resolve(const char *id, struct fs_object *obj);
+ int fs_list(const struct fs_object *obj, struct fs_listing *list);
++int fs_entry_path(const struct fs_object *obj, const struct fs_entry *e, char *buf, size_t len);
+ void fs_free_listing(struct fs_listing *list);
+ 
+ void fs_make_id(char *buf, size_t len, int idx, const char *rel, const char *name);
+--- /dev/null
++++ b/fsmeta.c
+@@ -0,0 +1,719 @@
++/* MiniDLNA media server
++ *
++ * Live folder mode: metadata learned on demand (probed files, played files,
++ * opened folders), kept in memory only.
++ *
++ * All probing runs in one worker thread: the metadata extractors keep
++ * static state and are not thread safe. A browse that wants results now
++ * queues probes and waits for them, at most probe_time milliseconds.
++ *
++ * This file is part of MiniDLNA.
++ *
++ * MiniDLNA is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License version 2 as
++ * published by the Free Software Foundation.
++ *
++ * MiniDLNA is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with MiniDLNA. If not, see <http://www.gnu.org/licenses/>.
++ */
++#include "config.h"
++
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <errno.h>
++#include <signal.h>
++#include <pthread.h>
++#include <unistd.h>
++#include <sys/time.h>
++#include <sys/resource.h>
++#ifdef __linux__
++#include <sys/syscall.h>
++#endif
++#ifdef THUMBNAIL_CREATION
++#include <libffmpegthumbnailer/videothumbnailerc.h>
++#endif
++
++#include "libav.h"
++#include "upnpglobalvars.h"
++#include "image_utils.h"
++#include "utils.h"
++#include "fsmeta.h"
++#include "log.h"
++
++#define HASH_SIZE	65536
++#define MAX_ENTRIES	50000		/* files and folders remembered */
++#define MAX_THUMB_BYTES	(64 << 20)	/* memory for thumbnails */
++#define MAX_QUEUE	2000		/* pending jobs per queue */
++#define THUMB_DIM	160
++
++struct entry {
++	struct entry *hnext;		/* hash chain */
++	struct entry *prev, *next;	/* LRU list, most recent first */
++	char *path;
++	off_t size;
++	time_t mtime;
++	int is_dir;
++	int count;			/* folders: number of entries, -1 unknown */
++	int probed;			/* files: 1 probed, -1 failed, 0 not yet */
++	int thumb_tried;
++	struct media_info info;		/* never holds art; see thumb */
++	uint8_t *thumb;
++	int thumb_size;
++};
++
++struct job {
++	struct job *next;
++	char *path;
++	media_types types;
++	unsigned long ticket;
++};
++
++struct queue {
++	struct job *head, *tail;
++	int len;
++};
++
++static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
++static pthread_cond_t work_cv = PTHREAD_COND_INITIALIZER;
++static pthread_cond_t done_cv = PTHREAD_COND_INITIALIZER;
++static struct entry *table[HASH_SIZE];
++static struct entry *lru_head, *lru_tail;
++static int n_entries;
++static long thumb_bytes;
++static struct queue probe_q, thumb_q;
++static unsigned long next_ticket, done_ticket;
++static int running, stopping;
++static pthread_t worker_id;
++
++static unsigned int
++hash_path(const char *s)
++{
++	unsigned int h = 2166136261u;
++
++	while (*s)
++		h = (h ^ (unsigned char)*s++) * 16777619u;
++
++	return h % HASH_SIZE;
++}
++
++static void
++lru_unlink(struct entry *e)
++{
++	if (e->prev)
++		e->prev->next = e->next;
++	else
++		lru_head = e->next;
++	if (e->next)
++		e->next->prev = e->prev;
++	else
++		lru_tail = e->prev;
++	e->prev = e->next = NULL;
++}
++
++static void
++lru_push(struct entry *e)
++{
++	e->next = lru_head;
++	if (lru_head)
++		lru_head->prev = e;
++	lru_head = e;
++	if (!lru_tail)
++		lru_tail = e;
++}
++
++static void
++drop_file_data(struct entry *e)
++{
++	free_media_info(&e->info);
++	e->probed = 0;
++	free(e->thumb);
++	thumb_bytes -= e->thumb_size;
++	e->thumb = NULL;
++	e->thumb_size = 0;
++	e->thumb_tried = 0;
++}
++
++static void
++remove_entry(struct entry *e)
++{
++	struct entry **p = &table[hash_path(e->path)];
++
++	while (*p && *p != e)
++		p = &(*p)->hnext;
++	if (*p)
++		*p = e->hnext;
++	lru_unlink(e);
++	drop_file_data(e);
++	free(e->path);
++	free(e);
++	n_entries--;
++}
++
++/* Forget the least recently used entries, but never keep */
++static void
++evict(struct entry *keep)
++{
++	while ((n_entries > MAX_ENTRIES || thumb_bytes > MAX_THUMB_BYTES) &&
++	       lru_tail && lru_tail != keep)
++		remove_entry(lru_tail);
++}
++
++static struct entry *
++find(const char *path, int create)
++{
++	unsigned int h = hash_path(path);
++	struct entry *e;
++
++	for (e = table[h]; e; e = e->hnext)
++	{
++		if (strcmp(e->path, path) == 0)
++		{
++			lru_unlink(e);
++			lru_push(e);
++			return e;
++		}
++	}
++	if (!create)
++		return NULL;
++
++	e = calloc(1, sizeof(*e));
++	if (!e || !(e->path = strdup(path)))
++	{
++		free(e);
++		return NULL;
++	}
++	e->count = -1;
++	e->hnext = table[h];
++	table[h] = e;
++	lru_push(e);
++	n_entries++;
++	evict(e);
++
++	return e;
++}
++
++static int
++fresh(const struct entry *e, const struct stat *st)
++{
++	return !e->is_dir && e->size == st->st_size && e->mtime == st->st_mtime;
++}
++
++static char *
++dupstr(const char *s)
++{
++	return s ? strdup(s) : NULL;
++}
++
++static void
++copy_info(struct media_info *dst, const struct media_info *src)
++{
++	*dst = *src;
++	dst->title = dupstr(src->title);
++	dst->creator = dupstr(src->creator);
++	dst->artist = dupstr(src->artist);
++	dst->album = dupstr(src->album);
++	dst->genre = dupstr(src->genre);
++	dst->comment = dupstr(src->comment);
++	dst->date = dupstr(src->date);
++	dst->duration = dupstr(src->duration);
++	dst->resolution = dupstr(src->resolution);
++	dst->dlna_pn = dupstr(src->dlna_pn);
++	dst->mime = dupstr(src->mime);
++	dst->art = NULL;
++	dst->art_size = 0;
++}
++
++/* Video frames need ffmpegthumbnailer and enable_thumbnail */
++static int
++can_make_video_thumb(const char *path, media_types types)
++{
++#ifdef THUMBNAIL_CREATION
++	return GETFLAG(THUMB_MASK) && (types & TYPE_VIDEO) && is_video(path);
++#else
++	(void)path;
++	(void)types;
++	return 0;
++#endif
++}
++
++static struct job *
++queued(struct queue *q, const char *path)
++{
++	struct job *j;
++
++	for (j = q->head; j; j = j->next)
++	{
++		if (strcmp(j->path, path) == 0)
++			return j;
++	}
++
++	return NULL;
++}
++
++static struct job *
++push(struct queue *q, const char *path, media_types types, unsigned long ticket)
++{
++	struct job *j;
++
++	if (q->len >= MAX_QUEUE || !(j = calloc(1, sizeof(*j))))
++		return NULL;
++	if (!(j->path = strdup(path)))
++	{
++		free(j);
++		return NULL;
++	}
++	j->types = types;
++	j->ticket = ticket;
++	if (q->tail)
++		q->tail->next = j;
++	else
++		q->head = j;
++	q->tail = j;
++	q->len++;
++
++	return j;
++}
++
++static struct job *
++pop(struct queue *q)
++{
++	struct job *j = q->head;
++
++	if (j)
++	{
++		q->head = j->next;
++		if (!q->head)
++			q->tail = NULL;
++		q->len--;
++	}
++
++	return j;
++}
++
++unsigned long
++fsmeta_request(const char *path, const struct stat *st, media_types types, int what)
++{
++	unsigned long ticket = 0;
++	struct entry *e;
++	struct job *j;
++	int ok;
++
++	if (!running)
++		return 0;
++
++	pthread_mutex_lock(&lock);
++	e = find(path, 0);
++	ok = e && fresh(e, st);
++	if ((what & FSMETA_PROBE) && !(ok && e->probed))
++	{
++		if ((j = queued(&probe_q, path)))
++			ticket = j->ticket;
++		else if ((j = push(&probe_q, path, types, next_ticket + 1)))
++			ticket = ++next_ticket;
++	}
++	if ((what & FSMETA_THUMB) && can_make_video_thumb(path, types) &&
++	    !(ok && (e->thumb || e->thumb_tried)) && !queued(&thumb_q, path))
++		push(&thumb_q, path, types, 0);
++	pthread_cond_signal(&work_cv);
++	pthread_mutex_unlock(&lock);
++
++	return ticket;
++}
++
++long long
++fsmeta_now_ms(void)
++{
++	struct timeval tv;
++
++	gettimeofday(&tv, NULL);
++	return (long long)tv.tv_sec * 1000 + tv.tv_usec / 1000;
++}
++
++void
++fsmeta_wait(unsigned long ticket, long long deadline_ms)
++{
++	struct timespec ts;
++
++	ts.tv_sec = deadline_ms / 1000;
++	ts.tv_nsec = (deadline_ms % 1000) * 1000000;
++	pthread_mutex_lock(&lock);
++	while (running && done_ticket < ticket)
++	{
++		if (pthread_cond_timedwait(&done_cv, &lock, &ts) == ETIMEDOUT)
++			break;
++	}
++	pthread_mutex_unlock(&lock);
++}
++
++int
++fsmeta_get(const char *path, const struct stat *st, struct media_info *info, int *thumb)
++{
++	struct entry *e;
++	int ret = 0;
++
++	if (thumb)
++		*thumb = 0;
++	pthread_mutex_lock(&lock);
++	e = find(path, 0);
++	if (e && fresh(e, st))
++	{
++		ret = e->probed;
++		if (ret == 1 && info)
++			copy_info(info, &e->info);
++		if (thumb)
++			*thumb = (e->thumb != NULL);
++	}
++	pthread_mutex_unlock(&lock);
++
++	return ret;
++}
++
++int
++fsmeta_get_thumb(const char *path, const struct stat *st, uint8_t **data, int *size)
++{
++	struct entry *e;
++	int ret = 0;
++
++	pthread_mutex_lock(&lock);
++	e = find(path, 0);
++	if (e && fresh(e, st) && e->thumb && (*data = malloc(e->thumb_size)))
++	{
++		memcpy(*data, e->thumb, e->thumb_size);
++		*size = e->thumb_size;
++		ret = 1;
++	}
++	pthread_mutex_unlock(&lock);
++
++	return ret;
++}
++
++void
++fsmeta_set_count(const char *path, time_t mtime, int count)
++{
++	struct entry *e;
++
++	if (!running)
++		return;
++	pthread_mutex_lock(&lock);
++	if ((e = find(path, 1)))
++	{
++		if (!e->is_dir)
++			drop_file_data(e);
++		e->is_dir = 1;
++		e->mtime = mtime;
++		e->count = count;
++	}
++	pthread_mutex_unlock(&lock);
++}
++
++int
++fsmeta_get_count(const char *path, time_t mtime)
++{
++	struct entry *e;
++	int count = -1;
++
++	pthread_mutex_lock(&lock);
++	e = find(path, 0);
++	if (e && e->is_dir && e->mtime == mtime)
++		count = e->count;
++	pthread_mutex_unlock(&lock);
++
++	return count;
++}
++
++int
++fsmeta_has_count(const char *path)
++{
++	struct entry *e;
++	int ret;
++
++	pthread_mutex_lock(&lock);
++	e = find(path, 0);
++	ret = e && e->is_dir && e->count >= 0;
++	pthread_mutex_unlock(&lock);
++
++	return ret;
++}
++
++/* A JPEG no larger than THUMB_DIM, from embedded cover art */
++static uint8_t *
++shrink_jpeg(const uint8_t *data, int size, int *out_size)
++{
++	image_s *src, *dst;
++	uint8_t *out = NULL;
++	int w, h;
++
++	if (size < 3 || data[0] != 0xFF || data[1] != 0xD8)
++		return NULL;
++	src = image_new_from_jpeg(NULL, 0, data, size, 1, ROTATE_NONE);
++	if (!src)
++		return NULL;
++	if (src->width <= THUMB_DIM && src->height <= THUMB_DIM)
++	{
++		if ((out = malloc(size)))
++		{
++			memcpy(out, data, size);
++			*out_size = size;
++		}
++	}
++	else
++	{
++		if (src->width >= src->height)
++		{
++			w = THUMB_DIM;
++			h = (int)((long long)src->height * THUMB_DIM / src->width);
++		}
++		else
++		{
++			h = THUMB_DIM;
++			w = (int)((long long)src->width * THUMB_DIM / src->height);
++		}
++		dst = image_resize(src, w ? w : 1, h ? h : 1);
++		if (dst)
++		{
++			out = image_save_to_jpeg_buf(dst, out_size);
++			image_free(dst);
++		}
++	}
++	image_free(src);
++
++	return out;
++}
++
++#ifdef THUMBNAIL_CREATION
++static uint8_t *
++video_thumb(const char *path, int *out_size)
++{
++	video_thumbnailer *vt = video_thumbnailer_create();
++	image_data *img = video_thumbnailer_create_image_data();
++	uint8_t *out = NULL;
++
++	if (vt && img)
++	{
++		vt->thumbnail_image_type = Jpeg;
++		vt->thumbnail_image_quality = runtime_vars.thumb_quality;
++		vt->seek_percentage = 20;
++		vt->overlay_film_strip = GETFLAG(THUMB_FILMSTRIP) ? 1 : 0;
++		video_thumbnailer_set_size(vt, runtime_vars.thumb_width, 0);
++		DPRINTF(E_DEBUG, L_METADATA, "generating thumbnail: %s\n", path);
++		if (video_thumbnailer_generate_thumbnail_to_buffer(vt, path, img) == 0 &&
++		    img->image_data_size > 2 && img->image_data_ptr[0] == 0xFF &&
++		    img->image_data_ptr[1] == 0xD8 && (out = malloc(img->image_data_size)))
++		{
++			memcpy(out, img->image_data_ptr, img->image_data_size);
++			*out_size = img->image_data_size;
++		}
++	}
++	if (img)
++		video_thumbnailer_destroy_image_data(img);
++	if (vt)
++		video_thumbnailer_destroy(vt);
++
++	return out;
++}
++#endif
++
++static int
++probe(const char *path, media_types types, struct media_info *info)
++{
++	const char *name = strrchr(path, '/') + 1;
++	media_types mtype = get_media_type(name);
++	char *esc = escape_tag(name, 1);
++	int ok = 0;
++
++	if (!esc)
++		return 0;
++	if (mtype == TYPE_IMAGE && (types & TYPE_IMAGE))
++		ok = ProbeImageMetadata(path, esc, info);
++	else
++	{
++		if (mtype == TYPE_VIDEO && (types & TYPE_VIDEO))
++			ok = ProbeVideoMetadata(path, esc, info);
++		/* Same fallback as the scanner, e.g. an audio-only .mp4 */
++		if (!ok && (types & TYPE_AUDIO) && is_audio(name))
++		{
++			free_media_info(info);
++			ok = ProbeAudioMetadata(path, esc, info);
++		}
++	}
++	if (!ok)
++		free_media_info(info);
++	free(esc);
++
++	return ok;
++}
++
++/* Store a thumbnail, unless the file changed meanwhile */
++static void
++store_thumb(const char *path, const struct stat *st, uint8_t *data, int size)
++{
++	struct entry *e;
++
++	pthread_mutex_lock(&lock);
++	e = find(path, 0);
++	if (e && fresh(e, st))
++	{
++		e->thumb_tried = 1;
++		if (data && !e->thumb)
++		{
++			e->thumb = data;
++			e->thumb_size = size;
++			thumb_bytes += size;
++			data = NULL;
++			evict(e);
++		}
++	}
++	pthread_mutex_unlock(&lock);
++	free(data);
++}
++
++static void
++process(const struct job *j, int thumb_job)
++{
++	struct media_info info;
++	struct entry *e;
++	struct stat st;
++	uint8_t *art = NULL, *thumb = NULL;
++	int art_size = 0, size = 0, need_probe, have_thumb;
++
++	if (stat(j->path, &st) != 0)
++		return;
++
++	pthread_mutex_lock(&lock);
++	e = find(j->path, 0);
++	need_probe = !(e && fresh(e, &st) && e->probed);
++	have_thumb = e && fresh(e, &st) && (e->thumb || e->thumb_tried);
++	pthread_mutex_unlock(&lock);
++
++	if (need_probe)
++	{
++		int ok;
++
++		memset(&info, 0, sizeof(info));
++		ok = probe(j->path, j->types, &info);
++		/* Embedded cover art becomes the thumbnail */
++		art = info.art;
++		art_size = info.art_size;
++		info.art = NULL;
++		info.art_size = 0;
++
++		pthread_mutex_lock(&lock);
++		if ((e = find(j->path, 1)))
++		{
++			if (!fresh(e, &st))
++			{
++				drop_file_data(e);
++				e->is_dir = 0;
++				e->count = -1;
++				e->size = st.st_size;
++				e->mtime = st.st_mtime;
++			}
++			free_media_info(&e->info);
++			e->info = info;
++			e->probed = ok ? 1 : -1;
++		}
++		else
++			free_media_info(&info);
++		pthread_mutex_unlock(&lock);
++
++		if (art)
++		{
++			thumb = shrink_jpeg(art, art_size, &size);
++			free(art);
++			if (thumb)
++			{
++				store_thumb(j->path, &st, thumb, size);
++				have_thumb = 1;
++			}
++		}
++	}
++
++#ifdef THUMBNAIL_CREATION
++	if (thumb_job && !have_thumb && can_make_video_thumb(j->path, j->types))
++	{
++		thumb = video_thumb(j->path, &size);
++		store_thumb(j->path, &st, thumb, size);
++	}
++#else
++	(void)thumb_job;
++	(void)have_thumb;
++#endif
++}
++
++static void *
++worker(void *arg)
++{
++	sigset_t set;
++	struct job *j;
++	int thumb_job;
++
++	(void)arg;
++	sigfillset(&set);
++	pthread_sigmask(SIG_BLOCK, &set, NULL);
++#ifdef __linux__
++	/* Don't compete with streaming for the CPU */
++	setpriority(PRIO_PROCESS, syscall(SYS_gettid), 10);
++#endif
++
++	pthread_mutex_lock(&lock);
++	while (!stopping)
++	{
++		thumb_job = 0;
++		if (!(j = pop(&probe_q)))
++		{
++			j = pop(&thumb_q);
++			thumb_job = 1;
++		}
++		if (!j)
++		{
++			pthread_cond_wait(&work_cv, &lock);
++			continue;
++		}
++		pthread_mutex_unlock(&lock);
++		process(j, thumb_job);
++		pthread_mutex_lock(&lock);
++		if (!thumb_job)
++		{
++			done_ticket = j->ticket;
++			pthread_cond_broadcast(&done_cv);
++		}
++		free(j->path);
++		free(j);
++	}
++	pthread_mutex_unlock(&lock);
++
++	return NULL;
++}
++
++void
++fsmeta_start(void)
++{
++	lav_register_all();
++	av_log_set_level(AV_LOG_PANIC);
++	if (pthread_create(&worker_id, NULL, worker, NULL) != 0)
++	{
++		DPRINTF(E_ERROR, L_GENERAL, "Cannot start the probing thread [%s]; "
++			"metadata will not be learned\n", strerror(errno));
++		return;
++	}
++	running = 1;
++}
++
++void
++fsmeta_stop(void)
++{
++	/* Not joined: the worker may be stuck reading a slow disk, and the
++	 * process is about to exit anyway */
++	pthread_mutex_lock(&lock);
++	stopping = 1;
++	running = 0;
++	pthread_cond_broadcast(&work_cv);
++	pthread_cond_broadcast(&done_cv);
++	pthread_mutex_unlock(&lock);
++}
+--- /dev/null
++++ b/fsmeta.h
+@@ -0,0 +1,58 @@
++/* MiniDLNA media server
++ *
++ * Live folder mode: metadata learned on demand (probed files, played files,
++ * opened folders), kept in memory only.
++ *
++ * This file is part of MiniDLNA.
++ *
++ * MiniDLNA is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License version 2 as
++ * published by the Free Software Foundation.
++ *
++ * MiniDLNA is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with MiniDLNA. If not, see <http://www.gnu.org/licenses/>.
++ */
++#ifndef __FSMETA_H__
++#define __FSMETA_H__
++
++#include <stdint.h>
++#include <sys/stat.h>
++#include "minidlnatypes.h"
++#include "metadata.h"
++
++/* What fsmeta_request() should make sure of */
++#define FSMETA_PROBE	0x01	/* duration, resolution, DLNA profile, tags... */
++#define FSMETA_THUMB	0x02	/* a thumbnail (video frame or embedded cover) */
++
++/* Start/stop the worker thread that does all probing */
++void fsmeta_start(void);
++void fsmeta_stop(void);
++
++/* Queue work for one file (types: the media types allowed in its media_dir).
++ * Returns a ticket for fsmeta_wait() if a probe was queued, else 0. */
++unsigned long fsmeta_request(const char *path, const struct stat *st, media_types types, int what);
++
++/* Wait until the probe with this ticket (and all before it) is done,
++ * or until deadline_ms (from fsmeta_now_ms()) has passed */
++void fsmeta_wait(unsigned long ticket, long long deadline_ms);
++long long fsmeta_now_ms(void);
++
++/* A copy of what is known about a file that hasn't changed since (size and
++ * mtime match st). info->art is never filled; *thumb tells if a thumbnail
++ * can be fetched. Returns 1 if probed, -1 if probing failed, 0 if unknown. */
++int fsmeta_get(const char *path, const struct stat *st, struct media_info *info, int *thumb);
++
++/* A malloc'ed copy of the thumbnail JPEG, if there is an up-to-date one */
++int fsmeta_get_thumb(const char *path, const struct stat *st, uint8_t **data, int *size);
++
++/* Number of entries in an opened folder, valid while its mtime is unchanged */
++void fsmeta_set_count(const char *path, time_t mtime, int count);
++int fsmeta_get_count(const char *path, time_t mtime);	/* -1 if unknown */
++int fsmeta_has_count(const char *path);	/* a count is stored, maybe stale */
++
++#endif
+--- a/Makefile.am
++++ b/Makefile.am
+@@ -28,7 +28,7 @@ minidlnad_SOURCES = minidlna.c upnphttp.
+ 			sql.c utils.c metadata.c scanner.c monitor.c \
+ 			tivo_utils.c tivo_beacon.c tivo_commands.c \
+ 			playlist.c image_utils.c albumart.c log.c \
+-			containers.c avahi.c fsbrowse.c tagutils/tagutils.c
++			containers.c avahi.c fsbrowse.c fsmeta.c tagutils/tagutils.c
+ 
+ if HAVE_KQUEUE
+ minidlnad_SOURCES += kqueue.c monitor_kqueue.c
+--- a/metadata.c
++++ b/metadata.c
+@@ -276,6 +276,63 @@ free_metadata(metadata_t *m, uint32_t fl
+ 		free(m->resolution);
+ }
+ 
++static char *
++dupstr(const char *s)
++{
++	return s ? strdup(s) : NULL;
++}
++
++/* Copy what was extracted into the caller's media_info (live folder mode) */
++static void
++fill_media_info(struct media_info *info, const metadata_t *m, const char *mime)
++{
++	info->title = dupstr(m->title);
++	info->creator = dupstr(m->creator);
++	info->artist = dupstr(m->artist);
++	info->album = dupstr(m->album);
++	info->genre = dupstr(m->genre);
++	info->comment = dupstr(m->comment);
++	info->date = dupstr(m->date);
++	info->duration = dupstr(m->duration);
++	info->resolution = dupstr(m->resolution);
++	info->dlna_pn = dupstr(m->dlna_pn);
++	info->mime = dupstr(mime ? mime : m->mime);
++	info->channels = m->channels;
++	info->bitrate = m->bitrate;
++	info->frequency = m->frequency;
++	info->disc = m->disc;
++	info->track = m->track;
++	info->rotation = m->rotation;
++}
++
++static void
++copy_art(struct media_info *info, const uint8_t *data, int size)
++{
++	if( data && size > 0 && (info->art = malloc(size)) )
++	{
++		memcpy(info->art, data, size);
++		info->art_size = size;
++	}
++}
++
++void
++free_media_info(struct media_info *info)
++{
++	free(info->title);
++	free(info->creator);
++	free(info->artist);
++	free(info->album);
++	free(info->genre);
++	free(info->comment);
++	free(info->date);
++	free(info->duration);
++	free(info->resolution);
++	free(info->dlna_pn);
++	free(info->mime);
++	free(info->art);
++	memset(info, 0, sizeof(*info));
++}
++
+ int64_t
+ GetFolderMetadata(const char *name, const char *path, const char *artist, const char *genre, int64_t album_art)
+ {
+@@ -294,8 +351,10 @@ GetFolderMetadata(const char *name, cons
+ 	return ret;
+ }
+ 
+-int64_t
+-GetAudioMetadata(const char *path, const char *name)
++/* With info, fill it and leave the database alone; otherwise insert into
++ * DETAILS and return the new row id */
++static int64_t
++audio_metadata(const char *path, const char *name, struct media_info *info)
+ {
+ 	char type[4];
+ 	static char lang[6] = { '\0' };
+@@ -476,6 +535,20 @@ GetAudioMetadata(const char *path, const
+ 		}
+ 	}
+ 
++	if( info )
++	{
++		fill_media_info(info, &m, song.mime);
++		info->channels = song.channels;
++		info->bitrate = song.bitrate;
++		info->frequency = song.samplerate;
++		info->disc = song.disc;
++		info->track = song.track;
++		copy_art(info, song.image, song.image_size);
++		freetags(&song);
++		free_metadata(&m, free_flags);
++		return 1;
++	}
++
+ 	album_art = find_album_art(path, song.image, song.image_size);
+ 
+ 	ret = sql_exec(db, "INSERT into DETAILS"
+@@ -501,6 +574,18 @@ GetAudioMetadata(const char *path, const
+ 	return ret;
+ }
+ 
++int64_t
++GetAudioMetadata(const char *path, const char *name)
++{
++	return audio_metadata(path, name, NULL);
++}
++
++int
++ProbeAudioMetadata(const char *path, const char *name, struct media_info *info)
++{
++	return audio_metadata(path, name, info) > 0;
++}
++
+ /* For libjpeg error handling */
+ static jmp_buf setjmp_buffer;
+ static void
+@@ -511,8 +596,8 @@ libjpeg_error_handler(j_common_ptr cinfo
+ 	return;
+ }
+ 
+-int64_t
+-GetImageMetadata(const char *path, const char *name)
++static int64_t
++image_metadata(const char *path, const char *name, struct media_info *info)
+ {
+ 	ExifData *ed;
+ 	ExifEntry *e = NULL;
+@@ -660,6 +745,14 @@ no_exifdata:
+ 	m.title = strdup(name);
+ 	strip_ext(m.title);
+ 
++	if( info )
++	{
++		fill_media_info(info, &m, NULL);
++		info->exif_thumb = thumb;
++		free_metadata(&m, free_flags);
++		return 1;
++	}
++
+ 	ret = sql_exec(db, "INSERT into DETAILS"
+ 	                   " (PATH, TITLE, SIZE, TIMESTAMP, DATE, RESOLUTION,"
+ 	                    " ROTATION, THUMBNAIL, CREATOR, DLNA_PN, MIME) "
+@@ -682,7 +775,19 @@ no_exifdata:
+ }
+ 
+ int64_t
+-GetVideoMetadata(const char *path, const char *name)
++GetImageMetadata(const char *path, const char *name)
++{
++	return image_metadata(path, name, NULL);
++}
++
++int
++ProbeImageMetadata(const char *path, const char *name, struct media_info *info)
++{
++	return image_metadata(path, name, info) > 0;
++}
++
++static int64_t
++video_metadata(const char *path, const char *name, struct media_info *info)
+ {
+ 	struct stat file;
+ 	int ret, i;
+@@ -1587,6 +1692,18 @@ video_no_dlna:
+ 		}
+ 	}
+ 
++	if( info )
++	{
++		fill_media_info(info, &m, NULL);
++		/* The attached picture lives in ctx, so copy it before closing */
++		copy_art(info, m.thumb_data, m.thumb_size);
++		freetags(&video);
++		lav_close(ctx);
++		free_metadata(&m, free_flags);
++		free(path_cpy);
++		return 1;
++	}
++
+ 	album_art = find_album_art(path, m.thumb_data, m.thumb_size);
+ 	freetags(&video);
+ 	lav_close(ctx);
+@@ -1615,3 +1732,15 @@ video_no_dlna:
+ 
+ 	return ret;
+ }
++
++int64_t
++GetVideoMetadata(const char *path, const char *name)
++{
++	return video_metadata(path, name, NULL);
++}
++
++int
++ProbeVideoMetadata(const char *path, const char *name, struct media_info *info)
++{
++	return video_metadata(path, name, info) > 0;
++}
+--- a/metadata.h
++++ b/metadata.h
+@@ -100,4 +100,44 @@ GetImageMetadata(const char *path, const
+ int64_t
+ GetVideoMetadata(const char *path, const char *name);
+ 
++/* What a probe learns about one file, for live folder mode. Text fields
++ * are escaped the same way as in the database (ready for DIDL output). */
++struct media_info {
++	char *title;
++	char *creator;
++	char *artist;
++	char *album;
++	char *genre;
++	char *comment;
++	char *date;
++	char *duration;
++	char *resolution;
++	char *dlna_pn;
++	char *mime;
++	unsigned int channels;
++	unsigned int bitrate;
++	unsigned int frequency;
++	unsigned int disc;
++	unsigned int track;
++	unsigned int rotation;
++	int exif_thumb;		/* image has a usable EXIF thumbnail */
++	uint8_t *art;		/* embedded cover / attached picture (JPEG) */
++	int art_size;
++};
++
++/* Probe*Metadata(): fill *info without touching the database.
++ * They share static state, so call them from one thread only.
++ * returns: 1 success, 0 failure */
++int
++ProbeAudioMetadata(const char *path, const char *name, struct media_info *info);
++
++int
++ProbeImageMetadata(const char *path, const char *name, struct media_info *info);
++
++int
++ProbeVideoMetadata(const char *path, const char *name, struct media_info *info);
++
++void
++free_media_info(struct media_info *info);
++
+ #endif
+--- a/minidlna.c
++++ b/minidlna.c
+@@ -94,6 +94,7 @@
+ #include "scanner.h"
+ #include "monitor.h"
+ #include "fsbrowse.h"
++#include "fsmeta.h"
+ #include "libav.h"
+ #include "log.h"
+ #include "tivo_beacon.h"
+@@ -577,7 +578,7 @@ init(int argc, char **argv)
+ 	int debug_flag = 0;
+ 	int default_log = 0;
+ 	int bad_option = 0;
+-	int port_set = 0, uuid_set = 0, name_set = 0;
++	int port_set = 0, uuid_set = 0, name_set = 0, thumb_set = 0;
+ 	int port_pidfile_name;
+ 	const char *default_pidfile = pidfilename;
+ 	int verbose_flag = 0;
+@@ -624,6 +625,8 @@ init(int argc, char **argv)
+ 	runtime_vars.max_connections = 50;
+ 	runtime_vars.root_container = BROWSEDIR_ID;	/* root_container=B */
+ 	runtime_vars.ifaces[0] = NULL;
++	runtime_vars.probe_limit = 30;
++	runtime_vars.probe_time = 500;
+ 
+ #ifdef THUMBNAIL_CREATION
+ 	runtime_vars.thumb_width = 160;
+@@ -934,12 +937,19 @@ init(int argc, char **argv)
+ 			else
+ 				SETFLAG(SUBTITLES_MASK);
+ 			break;
++		case PROBE_LIMIT:
++			runtime_vars.probe_limit = atoi(ary_options[i].value);
++			break;
++		case PROBE_TIME:
++			runtime_vars.probe_time = atoi(ary_options[i].value);
++			break;
+ #ifdef THUMBNAIL_CREATION
+ 		case ENABLE_THUMB:
+ 			if( (strcmp(ary_options[i].value, "yes") == 0) || atoi(ary_options[i].value) )
+ 				SETFLAG(THUMB_MASK);
+ 			else
+ 				CLEARFLAG(THUMB_MASK);
++			thumb_set = 1;
+ 		break;
+ 		case THUMB_WIDTH:
+ 			runtime_vars.thumb_width = atoi(ary_options[i].value);
+@@ -1244,7 +1254,14 @@ init(int argc, char **argv)
+ 			DPRINTF(E_WARN, L_GENERAL, "TiVo support needs a database (db_dir); disabling it\n");
+ 			CLEARFLAG(TIVO_MASK);
+ 		}
++#ifdef THUMBNAIL_CREATION
++		/* Thumbnails are only made for played files and small folders
++		 * here, so they are on unless switched off */
++		if (!thumb_set)
++			SETFLAG(THUMB_MASK);
++#endif
+ 	}
++	(void)thumb_set;
+ 
+ 	if (!port_pidfile_name && process_check_if_running(pidfilename) < 0)
+ 		DPRINTF(E_FATAL, L_GENERAL, SERVER_NAME " is already running. EXITING.\n");
+@@ -1407,6 +1424,8 @@ main(int argc, char **argv)
+ 	{
+ 		/* Listings are sorted like the scanner's alphasort() */
+ 		setlocale(LC_COLLATE, "");
++		/* Learns metadata of opened folders and played files */
++		fsmeta_start();
+ 	}
+ 	else
+ 	{
+@@ -1628,6 +1647,8 @@ shutdown:
+ #ifdef HAVE_WATCH
+ 	monitor_stop();
+ #endif
++	if (fs_mode())
++		fsmeta_stop();
+ 
+ 	/* kill other child processes */
+ 	process_reap_children();
+--- a/minidlna.conf
++++ b/minidlna.conf
+@@ -104,8 +104,17 @@ wide_links=yes
+ #enable_subtitles=yes
+ 
+ # Suport to Movie Thumbnail generation. To use this option, thumbnail generation must be enable at compile time.
++# note: when db_dir is empty the default is yes (only played videos and videos in small folders get one)
+ #enable_thumbnail=no
+ 
++# when db_dir is empty: folders with at most this many media files are probed (duration, resolution,
++# DLNA profile, tags) while the client waits; larger folders are not. 0 = never probe while browsing
++#probe_limit=30
++
++# when db_dir is empty: the longest a browse waits for probing, in milliseconds; whatever is not
++# done by then is finished in the background and shows on the next browse
++#probe_time=500
++
+ # The width of the thumbnail image. Large images takes more time to generate.  To use this option, thumbnail generation must be enable at compile time.
+ #thumbnail_width=160
+ 
+--- a/minidlna.conf.5
++++ b/minidlna.conf.5
+@@ -117,9 +117,19 @@ EG: presentation_url=http://www.mediaser
+ .IP "\fBdb_dir\fP"
+ Where minidlna stores the data files, including Album cache files. If it is
+ not set, no database is built: each folder is read from disk when a client
+-browses it, and only file names, sizes and dates are reported. Search, the
+-Artist/Album/Genre views, thumbnails, durations, bookmarks and TiVo support
+-need a database.
++browses it. Durations, resolutions, tags and thumbnails are learned only for
++small folders (see \fBprobe_limit\fP) and played files, and kept in memory.
++Search, the Artist/Album/Genre views, bookmarks and TiVo support need a
++database.
++
++.IP "\fBprobe_limit\fP"
++Without \fBdb_dir\fP: a folder with at most this many media files (default 30)
++has them probed while the client waits; larger folders are not. Played files
++are always probed in the background. 0 disables probing while browsing.
++
++.IP "\fBprobe_time\fP"
++Without \fBdb_dir\fP: the longest a browse waits for probing, in milliseconds
++(default 500). The rest is finished in the background and shows next time.
+ 
+ .IP "\fBlog_dir\fP"
+ Path to the directory where the log file upnp-av.log should be stored, this 
+--- a/minidlnatypes.h
++++ b/minidlnatypes.h
+@@ -51,6 +51,8 @@ struct runtime_vars_s {
+ 	int max_connections;	/* max number of simultaneous conenctions */
+ 	const char *root_container;	/* root ObjectID (instead of "0") */
+ 	const char *ifaces[MAX_LAN_ADDR];	/* list of configured network interfaces */
++	int probe_limit;	/* live folders: probe while browsing up to this many media files */
++	int probe_time;	/* live folders: ms a browse may wait for probing */
+ #ifdef THUMBNAIL_CREATION
+ 	int thumb_width;
+ 	int thumb_quality;
+--- a/options.c
++++ b/options.c
+@@ -68,6 +68,8 @@ static const struct {
+ 	{ WIDE_LINKS, "wide_links" },
+ 	{ TIVO_DISCOVERY, "tivo_discovery" },
+ 	{ ENABLE_SUBTITLES, "enable_subtitles" },
++	{ PROBE_LIMIT, "probe_limit" },
++	{ PROBE_TIME, "probe_time" },
+ #ifdef THUMBNAIL_CREATION
+ 	{ ENABLE_THUMB, "enable_thumbnail" },
+ 	{ THUMB_WIDTH, "thumbnail_width" },
+--- a/options.h
++++ b/options.h
+@@ -63,6 +63,8 @@ enum upnpconfigoptions {
+ 	WIDE_LINKS,			/* allow following symlinks outside the defined media_dirs */
+ 	TIVO_DISCOVERY,			/* TiVo discovery protocol: bonjour or beacon. Defaults to bonjour if supported */
+ 	ENABLE_SUBTITLES,		/* Enable generic subtitle support for all clients by default */
++	PROBE_LIMIT,			/* live folders: probe items of folders with up to this many media files */
++	PROBE_TIME,			/* live folders: milliseconds a browse may wait for probing */
+ #ifdef THUMBNAIL_CREATION
+ 	ENABLE_THUMB,                   /* enable thumbnail generation */
+ 	THUMB_WIDTH,                    /* thunbnail image with */
+--- a/README.md
++++ b/README.md
+@@ -13,6 +13,7 @@ patches that let it run without a media
+ | `17-defaults-run-as-invoking-user.patch` | `root_container=B` by default; empty `user=`/`db_dir=` accepted; per-user log and pid files for unprivileged runs. The package no longer creates a `minidlna` system user. |
+ | `18-cmdline-options-and-cwd-media-dir.patch` | Every config option can be given as `--option=value`; without `-f` no config file is read and the current directory is served; `wide_links=yes` by default. |
+ | `21-auto-http-port.patch` | Without a port setting, the first free port from 8200 is used; per-port pid file, UUID and default name, so several instances can run side by side. |
++| `22-lazy-metadata-for-live-folders.patch` | Live folders learn durations, resolutions, tags and thumbnails for small folders and played files, and item counts for opened folders, in memory. |
+ 
+ ## Original README
+ 
+@@ -62,13 +63,26 @@ In this tree the licence files are `COPY
+   reads that one folder and `stat()`s only the page of entries the client
+   asked for. A folder with 20,000 entries answers in milliseconds once it
+   is in the page cache, and Linux OS does all the file caching.
+-- Clients see your folder tree. Files are typed by extension (no media
+-  probing), with size and date; `.srt`/`.smi` subtitles and `cover.jpg`
+-  style art next to the files are served.
+-- Not available: search, Artist/Album/Genre views, thumbnails, durations,
+-  DLNA profile names, resume bookmarks and TiVo. Some TVs show no duration
+-  or cannot seek without them, and Xbox 360/Windows Media Player rely on
+-  search.
++- Clients see your folder tree. Files are typed by extension, with size and
++  date; `.srt`/`.smi` subtitles and `cover.jpg` style art next to the files
++  are served.
++- Details are learned only where they are cheap, and kept in memory:
++  - **Small folders** (at most `probe_limit`=30 media files): each file is
++    probed for duration, resolution, bitrate, DLNA profile and tags while
++    the client waits, for at most `probe_time`=500 ms; anything left is
++    finished in the background and shows the next time.
++  - **Large folders**: nothing is probed; only the names and the page of
++    sizes are read.
++  - **Played files**: probed in the background on first play, and a video
++    gets a thumbnail (a frame, or its embedded cover). Once probed, its
++    exact DLNA profile is sent with the stream, which helps TVs seek.
++  - **Opened folders**: remember their number of entries, shown by clients
++    the next time the parent folder is listed.
++  - Everything is checked against the file's size and modification time
++    (a folder's modification time), so changed files are re-probed and
++    changed folders recounted. Nothing survives a restart.
++- Not available: search, Artist/Album/Genre views, resume bookmarks and
++  TiVo. Xbox 360/Windows Media Player rely on search.
+ 
+ **Database mode** (`db_dir=/var/cache/minidlna`)
+ - The original behaviour: all media is scanned into SQLite on start-up and
+@@ -222,6 +236,9 @@ and minidlnad exits if it is busy.
+ | `root_container` | `B` | folder tree; only matters in database mode |
+ | `wide_links` | `yes` | follow symlinks that point outside `media_dir` |
+ | `inotify` | `yes` | database mode only |
++| `probe_limit` | `30` | live folders: probe folders with at most this many media files while browsing; `0` = never |
++| `probe_time` | `500` | live folders: milliseconds a browse may wait for probing |
++| `enable_thumbnail` | `yes` (live folders), `no` (database) | video thumbnails; live folders only make them for played files and small folders |
+ | `port` | first free from `8200` | a set port is used exactly; the service sets `8200` |
+ | `network_interface` | all | interface names, comma separated |
+ 
+--- a/upnphttp.c
++++ b/upnphttp.c
+@@ -77,6 +77,8 @@
+ #include "log.h"
+ #include "sql.h"
+ #include "fsbrowse.h"
++#include "fsmeta.h"
++#include "metadata.h"
+ #include <libexif/exif-loader.h>
+ #include "tivo_utils.h"
+ #include "tivo_commands.h"
+@@ -1543,11 +1545,33 @@ SendResp_albumArt(struct upnphttp * h, c
+ 		/* "1-<id>.jpg" from DIDL, or "<id>.<ext>?albumArt=true" for MS clients */
+ 		if( strncmp(object, "1-", 2) == 0 )
+ 			object += 2;
+-		if( fs_url_object(object, &obj) == 0 &&
+-		    fs_find_art(obj.path, S_ISDIR(obj.st.st_mode), art, sizeof(art)) == 0 )
+-			path = sqlite3_mprintf("%s", art);
+-		else
+-			path = NULL;
++		path = NULL;
++		if( fs_url_object(object, &obj) == 0 )
++		{
++			uint8_t *thumb;
++			int thumb_size;
++
++			/* Cover files first, then a learned thumbnail (embedded
++			 * cover art or a video frame) */
++			if( fs_find_art(obj.path, S_ISDIR(obj.st.st_mode), art, sizeof(art)) == 0 )
++				path = sqlite3_mprintf("%s", art);
++			else if( S_ISREG(obj.st.st_mode) &&
++			         fsmeta_get_thumb(obj.path, &obj.st, &thumb, &thumb_size) )
++			{
++				DPRINTF(E_INFO, L_HTTP, "Serving thumbnail of %s\n", obj.path);
++				INIT_STR(str, header);
++				start_dlna_header(&str, 200, "Interactive", "image/jpeg");
++				strcatf(&str, "Content-Length: %d\r\n"
++				              "contentFeatures.dlna.org: DLNA.ORG_PN=JPEG_TN\r\n\r\n",
++				              thumb_size);
++				if( send_data(h, str.data, str.off, MSG_MORE) == 0 &&
++				    h->req_command != EHead )
++					send_data(h, (char *)thumb, thumb_size, 0);
++				free(thumb);
++				CloseSocket_upnphttp(h);
++				return;
++			}
++		}
+ 	}
+ 	else
+ 		path = sql_get_text_field(db, "SELECT PATH from ALBUM_ART where ID = '%lld'", id);
+@@ -1658,13 +1682,6 @@ SendResp_thumbnail(struct upnphttp * h,
+ 	ExifLoader *l;
+ 	struct string_s str;
+ 
+-	/* Live folder mode never advertises thumbnails */
+-	if( fs_mode() )
+-	{
+-		Send404(h);
+-		return;
+-	}
+-
+ 	if( h->reqflags & (FLAG_XFERSTREAMING|FLAG_RANGE) )
+ 	{
+ 		DPRINTF(E_WARN, L_HTTP, "Client tried to specify transferMode as Streaming with an image!\n");
+@@ -1673,7 +1690,20 @@ SendResp_thumbnail(struct upnphttp * h,
+ 	}
+ 
+ 	id = strtoll(object, NULL, 10);
+-	path = sql_get_text_field(db, "SELECT PATH from DETAILS where ID = '%lld'", id);
++	if( fs_mode() )
++	{
++		/* The photo's EXIF thumbnail, read on request */
++		struct fs_object obj;
++		const char *name;
++
++		path = NULL;
++		if( fs_url_object(object, &obj) == 0 && S_ISREG(obj.st.st_mode) &&
++		    (name = strrchr(obj.path, '/')) && is_image(name + 1) &&
++		    (obj.types & TYPE_IMAGE) )
++			path = sqlite3_mprintf("%s", obj.path);
++	}
++	else
++		path = sql_get_text_field(db, "SELECT PATH from DETAILS where ID = '%lld'", id);
+ 	if( !path )
+ 	{
+ 		DPRINTF(E_WARN, L_HTTP, "DETAIL ID %s not found, responding ERROR 404\n", object);
+@@ -1744,27 +1774,46 @@ SendResp_resizedimg(struct upnphttp * h,
+ 	int scale = 1;
+ 	const char *tmode;
+ 
+-	/* No resolution is known in live folder mode, so nothing to scale */
+-	if( fs_mode() )
+-	{
+-		Send404(h);
+-		return;
+-	}
++	char fs_path[PATH_MAX], fs_resolution[32];
+ 
+ 	id = strtoll(object, &saveptr, 10);
+-	snprintf(buf, sizeof(buf), "SELECT PATH, RESOLUTION, ROTATION from DETAILS where ID = '%lld'", (long long)id);
+-	ret = sql_get_table(db, buf, &result, &rows, NULL);
+-	if( ret != SQLITE_OK )
++	if( fs_mode() )
+ 	{
+-		Send500(h);
+-		return;
++		/* Scaling needs the resolution, known once the photo was probed */
++		struct fs_object obj;
++		struct media_info info;
++
++		result = NULL;
++		memset(&info, 0, sizeof(info));
++		if( fs_url_object(object, &obj) == 0 && S_ISREG(obj.st.st_mode) &&
++		    fsmeta_get(obj.path, &obj.st, &info, NULL) == 1 && info.resolution &&
++		    info.mime && strcmp(info.mime, "image/jpeg") == 0 )
++		{
++			memcpy(fs_path, obj.path, sizeof(fs_path));
++			strncpyt(fs_resolution, info.resolution, sizeof(fs_resolution));
++			file_path = fs_path;
++			resolution = fs_resolution;
++			rotate = info.rotation;
++		}
++		free_media_info(&info);
++		saveptr = strchr(object, '?');
+ 	}
+-	if( rows )
++	else
+ 	{
+-		file_path = result[3];
+-		resolution = result[4];
+-                if (result[5])
+-			rotate = atoi(result[5]);
++		snprintf(buf, sizeof(buf), "SELECT PATH, RESOLUTION, ROTATION from DETAILS where ID = '%lld'", (long long)id);
++		ret = sql_get_table(db, buf, &result, &rows, NULL);
++		if( ret != SQLITE_OK )
++		{
++			Send500(h);
++			return;
++		}
++		if( rows )
++		{
++			file_path = result[3];
++			resolution = result[4];
++			if (result[5])
++				rotate = atoi(result[5]);
++		}
+ 	}
+ 	if( !file_path || !resolution || (access(file_path, F_OK) != 0) )
+ 	{
+@@ -1796,7 +1845,8 @@ SendResp_resizedimg(struct upnphttp * h,
+ 		else if( strcasecmp(key, "rotation") == 0 )
+ 		{
+ 			rotate = (rotate + atoi(val)) % 360;
+-			sql_exec(db, "UPDATE DETAILS set ROTATION = %d where ID = %lld", rotate, id);
++			if( !fs_mode() )
++				sql_exec(db, "UPDATE DETAILS set ROTATION = %d where ID = %lld", rotate, id);
+ 		}
+ 		else if( strcasecmp(key, "pixelshape") == 0 )
+ 		{
+@@ -2034,9 +2084,25 @@ SendResp_dlnafile(struct upnphttp *h, ch
+ 		last_file.id = 0;
+ 		last_file.client = ctype;
+ 		memcpy(last_file.path, obj.path, sizeof(last_file.path));
+-		strncpyt(last_file.mime, mime, sizeof(last_file.mime));
+-		client_mime_quirks(last_file.mime, cflags, ctype);
+ 		last_file.dlna[0] = '\0';
++		/* A played file is worth learning about (and a thumbnail); once
++		 * probed, its exact MIME type and DLNA profile help seeking */
++		fsmeta_request(obj.path, &obj.st, obj.types, FSMETA_PROBE|FSMETA_THUMB);
++		{
++			struct media_info info;
++
++			memset(&info, 0, sizeof(info));
++			if( fsmeta_get(obj.path, &obj.st, &info, NULL) == 1 )
++			{
++				if( info.mime )
++					mime = info.mime;
++				if( info.dlna_pn )
++					snprintf(last_file.dlna, sizeof(last_file.dlna), "DLNA.ORG_PN=%s;", info.dlna_pn);
++			}
++			strncpyt(last_file.mime, mime, sizeof(last_file.mime));
++			free_media_info(&info);
++		}
++		client_mime_quirks(last_file.mime, cflags, ctype);
+ 	}
+ 	else if( cflags & FLAG_MS_PFS )
+ 	{
+--- a/upnpsoap.c
++++ b/upnpsoap.c
+@@ -73,6 +73,8 @@
+ #include "scanner.h"
+ #include "sql.h"
+ #include "fsbrowse.h"
++#include "fsmeta.h"
++#include "metadata.h"
+ #include "log.h"
+ 
+ #ifdef __sparc__ /* Sorting takes too long on slow processors with very large containers */
+@@ -962,8 +964,9 @@ callback(void *args, int argc, char **ar
+ 				if( strlen(title) > 23 )
+ 					title[23] = '\0';
+ 			}
+-			/* Hyundai hack: Only titles with a media extension get recognized. */
+-			else if( passed_args->client == EHyundaiTV )
++			/* Hyundai hack: Only titles with a media extension get recognized.
++			 * (Live folder titles are full file names and have one already.) */
++			else if( passed_args->client == EHyundaiTV && !is_video(title) )
+ 			{
+ 				ext = mime_to_ext(mime);
+ 				ret = asprintf(&alt_title, "%s.%s", title, ext);
+@@ -1248,9 +1251,12 @@ callback(void *args, int argc, char **ar
+ 		if( passed_args->filter & FILTER_SEARCHABLE ) {
+ 			ret = strcatf(str, "searchable=\"%d\" ", (fs_mode() || check_magic_container(id, passed_args->flags)) ? 0 : 1);
+ 		}
+-		/* Counting children in live folder mode would cost a readdir per folder */
+-		if( (passed_args->filter & FILTER_CHILDCOUNT) && !fs_mode() ) {
+-			ret = strcatf(str, "childCount=\"%d\"", get_child_count(id, check_magic_container(id, passed_args->flags)));
++		if( passed_args->filter & FILTER_CHILDCOUNT ) {
++			/* Live folders only know the count of folders opened before */
++			if( !fs_mode() )
++				ret = strcatf(str, "childCount=\"%d\"", get_child_count(id, check_magic_container(id, passed_args->flags)));
++			else if( passed_args->child_count >= 0 )
++				ret = strcatf(str, "childCount=\"%d\"", passed_args->child_count);
+ 		}
+ 		/* If the client calls for BrowseMetadata on root, we have to include our "upnp:searchClass"'s, unless they're filtered out */
+ 		if( passed_args->requested == 1 && strcmp(id, "0") == 0 && (passed_args->filter & FILTER_UPNP_SEARCHCLASS) && !fs_mode() ) {
+@@ -1305,13 +1311,16 @@ callback(void *args, int argc, char **ar
+ }
+ 
+ /* Live folder mode: feed one filesystem entry through callback() as if it
+- * were a database row, so the DIDL output and client quirks stay shared. */
++ * were a database row, so the DIDL output and client quirks stay shared.
++ * info is what probing learned about the file, or NULL. */
+ static int
+ fs_send_row(struct Response *args, const char *id, const char *parent, const char *class,
+-            const char *name, const char *mime, const struct stat *st, int album_art)
++            const char *name, const char *mime, const struct stat *st, int album_art,
++            const struct media_info *info, int child_count)
+ {
+ 	char *argv[25] = { NULL };
+ 	char size[24], date[32], mimebuf[64];
++	char bitrate[16], frequency[16], channels[16], track[16], disc[16], rotation[16];
+ 	char *title;
+ 	struct tm tm;
+ 	int ret;
+@@ -1319,8 +1328,7 @@ fs_send_row(struct Response *args, const
+ 	title = escape_tag(name, 1);
+ 	if( !title )
+ 		return 1;
+-	if( strncmp(class, "item", 4) == 0 )
+-		strip_ext(title);
++	/* Items keep their full file name, extension included */
+ 	argv[0] = (char *)id;
+ 	argv[1] = (char *)parent;
+ 	argv[3] = (char *)id;
+@@ -1335,6 +1343,53 @@ fs_send_row(struct Response *args, const
+ 		    strftime(date, sizeof(date), "%Y-%m-%dT%H:%M:%S", &tm) )
+ 			argv[16] = date;
+ 	}
++	if( info )
++	{
++		argv[7] = info->duration;
++		if( info->bitrate )
++		{
++			snprintf(bitrate, sizeof(bitrate), "%u", info->bitrate);
++			argv[8] = bitrate;
++		}
++		if( info->frequency )
++		{
++			snprintf(frequency, sizeof(frequency), "%u", info->frequency);
++			argv[9] = frequency;
++		}
++		argv[10] = info->artist;
++		argv[11] = info->album;
++		argv[12] = info->genre;
++		argv[13] = info->comment;
++		if( info->channels )
++		{
++			snprintf(channels, sizeof(channels), "%u", info->channels);
++			argv[14] = channels;
++		}
++		if( info->track )
++		{
++			snprintf(track, sizeof(track), "%u", info->track);
++			argv[15] = track;
++		}
++		if( info->date )
++			argv[16] = info->date;
++		argv[17] = info->resolution;
++		if( info->exif_thumb )
++			argv[18] = "1";
++		argv[19] = info->creator;
++		argv[20] = info->dlna_pn;
++		if( info->mime )
++			mime = info->mime;
++		if( info->rotation )
++		{
++			snprintf(rotation, sizeof(rotation), "%u", info->rotation);
++			argv[23] = rotation;
++		}
++		if( info->disc )
++		{
++			snprintf(disc, sizeof(disc), "%u", info->disc);
++			argv[24] = disc;
++		}
++	}
+ 	if( mime )
+ 	{
+ 		strncpyt(mimebuf, mime, sizeof(mimebuf));
+@@ -1342,6 +1397,7 @@ fs_send_row(struct Response *args, const
+ 	}
+ 	if( album_art )
+ 		argv[22] = "1";
++	args->child_count = child_count;
+ 
+ 	ret = callback(args, 25, argv, NULL);
+ 	free(title);
+@@ -1349,6 +1405,41 @@ fs_send_row(struct Response *args, const
+ 	return ret;
+ }
+ 
++/* A file's row, with whatever has been learned about it so far */
++static int
++fs_send_file(struct Response *args, const char *id, const char *parent, const char *path,
++             const char *name, const char *mime, const char *class, const struct stat *st,
++             int art, int captions)
++{
++	struct media_info info;
++	int probed = 0, thumb = 0, ret;
++
++	memset(&info, 0, sizeof(info));
++	if( st && path[0] )
++		probed = (fsmeta_get(path, st, &info, &thumb) == 1);
++	args->has_captions = captions;
++	/* A thumbnail is shown as album art; photos have their own */
++	ret = fs_send_row(args, id, parent, class, name, mime, st,
++	                  *mime != 'i' && (art || thumb), probed ? &info : NULL, -1);
++	free_media_info(&info);
++
++	return ret;
++}
++
++/* Entries in a folder, if it was opened before and hasn't changed since */
++static int
++fs_folder_count(int dfd, const char *name, const char *path)
++{
++	struct stat st;
++
++	if( !path[0] || !fsmeta_has_count(path) )
++		return -1;
++	if( (dfd >= 0 ? fstatat(dfd, name, &st, 0) : stat(path, &st)) != 0 )
++		return -1;
++
++	return fsmeta_get_count(path, st.st_mtime);
++}
++
+ static int
+ BrowseLiveFolder(struct Response *args, const char *ObjectID, int metadata,
+                  int StartingIndex, int RequestedCount, int *totalMatches)
+@@ -1360,8 +1451,9 @@ BrowseLiveFolder(struct Response *args,
+ 	char buf[PATH_MAX];
+ 	const char *mime, *class, *name;
+ 	struct stat st;
++	unsigned long ticket = 0, t;
+ 	long long end;
+-	int i, dfd, art, ret = 0;
++	int i, dfd, art, captions, nmedia, ret = 0;
+ 
+ 	if( fs_resolve(ObjectID, &obj) != 0 )
+ 		return -1;
+@@ -1373,22 +1465,27 @@ BrowseLiveFolder(struct Response *args,
+ 		*totalMatches = 1;
+ 		if( obj.idx < 0 )
+ 		{
+-			fs_send_row(args, id, parent, folder, "root", NULL, NULL, 0);
++			fs_send_row(args, id, parent, folder, "root", NULL, NULL, 0, NULL, -1);
+ 			return 0;
+ 		}
+ 		name = strrchr(obj.path, '/');
+ 		name = (name && name[1]) ? name + 1 : obj.path;
+ 		if( S_ISDIR(obj.st.st_mode) )
+ 		{
+-			fs_send_row(args, id, parent, folder, name, NULL, NULL, 1);
++			fs_send_row(args, id, parent, folder, name, NULL, NULL, 1, NULL,
++			            fsmeta_get_count(obj.path, obj.st.st_mtime));
+ 			return 0;
+ 		}
+ 		mime = fs_mime(name, obj.types, &class);
+ 		if( !mime )
+ 			return -1;
++		/* Clients ask about an item just before playing it: learn it now */
++		t = fsmeta_request(obj.path, &obj.st, obj.types, FSMETA_PROBE|FSMETA_THUMB);
++		if( t && runtime_vars.probe_time > 0 )
++			fsmeta_wait(t, fsmeta_now_ms() + runtime_vars.probe_time);
+ 		art = (*mime != 'i') && fs_find_art(obj.path, 0, buf, sizeof(buf)) == 0;
+-		args->has_captions = (*mime == 'v') && fs_find_caption(obj.path, buf, sizeof(buf)) == 0;
+-		fs_send_row(args, id, parent, class, name, mime, &obj.st, art);
++		captions = (*mime == 'v') && fs_find_caption(obj.path, buf, sizeof(buf)) == 0;
++		fs_send_file(args, id, parent, obj.path, name, mime, class, &obj.st, art, captions);
+ 		return 0;
+ 	}
+ 
+@@ -1398,6 +1495,30 @@ BrowseLiveFolder(struct Response *args,
+ 		return -1;
+ 	}
+ 	*totalMatches = list.count;
++	if( obj.idx >= 0 )
++		fsmeta_set_count(obj.path, obj.st.st_mtime, list.count);
++
++	/* Small folders: learn about every media file now, waiting at most
++	 * probe_time; large ones are left alone */
++	for( i = 0, nmedia = 0; i < list.count; i++ )
++		nmedia += !list.ents[i].is_dir;
++	if( nmedia && nmedia <= runtime_vars.probe_limit )
++	{
++		for( i = 0; i < list.count; i++ )
++		{
++			struct fs_entry *e = &list.ents[i];
++
++			if( e->is_dir || fs_entry_path(&obj, e, buf, sizeof(buf)) != 0 ||
++			    fstatat(list.dfd[e->idx], e->name, &st, 0) != 0 )
++				continue;
++			t = fsmeta_request(buf, &st, fs_media_types(e->idx), FSMETA_PROBE|FSMETA_THUMB);
++			if( t )
++				ticket = t;
++		}
++		if( ticket && runtime_vars.probe_time > 0 )
++			fsmeta_wait(ticket, fsmeta_now_ms() + runtime_vars.probe_time);
++	}
++
+ 	fs_object_id(parent, sizeof(parent), &obj);
+ 	end = (RequestedCount < 0) ? list.count : (long long)StartingIndex + RequestedCount;
+ 	if( end > list.count )
+@@ -1408,27 +1529,31 @@ BrowseLiveFolder(struct Response *args,
+ 	{
+ 		struct fs_entry *e = &list.ents[i];
+ 
++		if( fs_entry_path(&obj, e, buf, sizeof(buf)) != 0 )
++			buf[0] = '\0';
++		dfd = list.dfd[e->idx];
+ 		if( e->top )
+ 		{
+ 			fs_make_id(id, sizeof(id), e->idx, NULL, NULL);
+-			ret = fs_send_row(args, id, "0", folder, e->name, NULL, NULL, 1);
++			ret = fs_send_row(args, id, "0", folder, e->name, NULL, NULL, 1, NULL,
++			                  fs_folder_count(-1, NULL, buf));
+ 			continue;
+ 		}
+ 		fs_make_id(id, sizeof(id), e->idx, obj.idx < 0 ? NULL : obj.rel, e->name);
+ 		if( e->is_dir )
+ 		{
+ 			/* Folder art is looked up only if the client asks for it */
+-			ret = fs_send_row(args, id, parent, folder, e->name, NULL, NULL, 1);
++			ret = fs_send_row(args, id, parent, folder, e->name, NULL, NULL, 1, NULL,
++			                  fs_folder_count(dfd, e->name, buf));
+ 			continue;
+ 		}
+ 		mime = fs_mime(e->name, fs_media_types(e->idx), &class);
+ 		if( !mime )
+ 			continue;
+-		dfd = list.dfd[e->idx];
+ 		art = (*mime != 'i') && (list.has_art || fs_has_file_art(dfd, e->name));
+-		args->has_captions = (*mime == 'v') && fs_has_captions(dfd, e->name);
+-		ret = fs_send_row(args, id, parent, class, e->name, mime,
+-		                  fstatat(dfd, e->name, &st, 0) == 0 ? &st : NULL, art);
++		captions = (*mime == 'v') && fs_has_captions(dfd, e->name);
++		ret = fs_send_file(args, id, parent, buf, e->name, mime, class,
++		                   fstatat(dfd, e->name, &st, 0) == 0 ? &st : NULL, art, captions);
+ 	}
+ 	fs_free_listing(&list);
+ 
+--- a/upnpsoap.h
++++ b/upnpsoap.h
+@@ -46,6 +46,7 @@ struct Response
+ 	uint32_t flags;
+ 	enum client_types client;
+ 	int has_captions;	/* live folder mode: the current row has a caption file */
++	int child_count;	/* live folder mode: the current folder's entries, -1 unknown */
+ };
+ 
+ /* ExecuteSoapAction():

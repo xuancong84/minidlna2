@@ -349,6 +349,10 @@ mime_to_ext(const char * mime)
 				return "ogg";
 			else if( strcmp(mime+6, "x-dsd") == 0 )
 				return "dsd";
+			else if( strcmp(mime+6, "ogg") == 0 )
+				return "ogg";
+			else if( strcmp(mime+6, "x-matroska") == 0 )
+				return "mka";
 			break;
 		case 'v':
 			if( strcmp(mime+6, "avi") == 0 )
@@ -383,6 +387,8 @@ mime_to_ext(const char * mime)
 				return "jpg";
 			else if( strcmp(mime+6, "png") == 0 )
 				return "png";
+			else if( strcmp(mime+6, "webp") == 0 )
+				return "webp";
 			break;
 		default:
 			break;
@@ -390,42 +396,124 @@ mime_to_ext(const char * mime)
 	return "dat";
 }
 
+/* Media file extensions, matched case-insensitively. The defaults can be
+ * replaced with video_extensions=, audio_extensions= and image_extensions=. */
+#define MAX_EXTENSIONS 128
+
+static const char default_video_ext[] =
+	"mpg/mpeg/avi/divx/xvid/asf/wmv/mp4/m4v/mts/m2ts/m2t/ts/vob/mkv/webm/"
+#ifdef TIVO_SUPPORT
+	"TiVo/"
+#endif
+	"flv/mov/3gp/rm/rmvb";
+static const char default_audio_ext[] =
+	"mp3/flac/fla/flc/wma/asf/m4a/m4b/aac/mp4/m4p/wav/ogg/opus/mka/pcm/3gp/dsf/dff";
+static const char default_image_ext[] =
+	"jpg/jpeg/png/webp";
+
+struct ext_list {
+	char *buf;			/* the list, split in place */
+	const char *ext[MAX_EXTENSIONS];
+	int n;
+};
+
+static struct ext_list video_ext, audio_ext, image_ext;
+
+/* Split "mkv/.mp4, avi" into extensions without dots */
+static int
+parse_extensions(struct ext_list *l, const char *list)
+{
+	char *buf, *word, *saveptr = NULL;
+
+	if (!(buf = strdup(list)))
+		return -1;
+	free(l->buf);
+	l->buf = buf;
+	l->n = 0;
+	for (word = strtok_r(buf, "/, \t", &saveptr); word; word = strtok_r(NULL, "/, \t", &saveptr))
+	{
+		while (*word == '.')
+			word++;
+		if (*word && l->n < MAX_EXTENSIONS)
+			l->ext[l->n++] = word;
+	}
+
+	return l->n;
+}
+
+static struct ext_list *
+ext_list_for(media_types type, const char **def)
+{
+	switch (type)
+	{
+	case TYPE_VIDEO:
+		*def = default_video_ext;
+		return &video_ext;
+	case TYPE_AUDIO:
+		*def = default_audio_ext;
+		return &audio_ext;
+	case TYPE_IMAGE:
+		*def = default_image_ext;
+		return &image_ext;
+	default:
+		return NULL;
+	}
+}
+
+int
+set_media_extensions(media_types type, const char *list)
+{
+	const char *def;
+	struct ext_list *l = ext_list_for(type, &def);
+
+	return l ? parse_extensions(l, list) : -1;
+}
+
+const char *
+default_media_extensions(media_types type)
+{
+	const char *def = NULL;
+
+	ext_list_for(type, &def);
+	return def;
+}
+
+static int
+has_extension(media_types type, const char *file)
+{
+	const char *def, *dot = strrchr(file, '.');
+	struct ext_list *l = ext_list_for(type, &def);
+	int i;
+
+	if (!dot || !l)
+		return 0;
+	if (!l->buf)
+		parse_extensions(l, def);
+	for (i = 0; i < l->n; i++)
+	{
+		if (strcasecmp(dot + 1, l->ext[i]) == 0)
+			return 1;
+	}
+
+	return 0;
+}
+
 int
 is_video(const char * file)
 {
-	return (ends_with(file, ".mpg") || ends_with(file, ".mpeg")  ||
-		ends_with(file, ".avi") || ends_with(file, ".divx")  ||
-		ends_with(file, ".asf") || ends_with(file, ".wmv")   ||
-		ends_with(file, ".mp4") || ends_with(file, ".m4v")   ||
-		ends_with(file, ".mts") || ends_with(file, ".m2ts")  ||
-		ends_with(file, ".m2t") || ends_with(file, ".mkv")   ||
-		ends_with(file, ".vob") || ends_with(file, ".ts")    ||
-		ends_with(file, ".flv") || ends_with(file, ".xvid")  ||
-#ifdef TIVO_SUPPORT
-		ends_with(file, ".TiVo") ||
-#endif
-		ends_with(file, ".mov") || ends_with(file, ".3gp") ||
-		ends_with(file, ".rm") || ends_with(file, ".rmvb") ||
-		ends_with(file, ".webm"));
+	return has_extension(TYPE_VIDEO, file);
 }
 
 int
 is_audio(const char * file)
 {
-	return (ends_with(file, ".mp3") || ends_with(file, ".flac") ||
-		ends_with(file, ".wma") || ends_with(file, ".asf")  ||
-		ends_with(file, ".fla") || ends_with(file, ".flc")  ||
-		ends_with(file, ".m4a") || ends_with(file, ".aac")  ||
-		ends_with(file, ".mp4") || ends_with(file, ".m4p")  ||
-		ends_with(file, ".wav") || ends_with(file, ".ogg")  ||
-		ends_with(file, ".pcm") || ends_with(file, ".3gp")  ||
-		ends_with(file, ".dsf") || ends_with(file, ".dff"));
+	return has_extension(TYPE_AUDIO, file);
 }
 
 int
 is_image(const char * file)
 {
-	return (ends_with(file, ".jpg") || ends_with(file, ".jpeg"));
+	return has_extension(TYPE_IMAGE, file);
 }
 
 int

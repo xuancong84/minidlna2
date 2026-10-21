@@ -94,6 +94,7 @@
 #include "scanner.h"
 #include "monitor.h"
 #include "fsbrowse.h"
+#include "fsmeta.h"
 #include "libav.h"
 #include "log.h"
 #include "tivo_beacon.h"
@@ -152,7 +153,11 @@ OpenAndConfHTTPSocket(unsigned short port)
 		return -1;
 	}
 
-	if (listen(s, 16) < 0)
+	/* Requests are served one at a time; clients like VLC open dozens of
+	 * connections at once (folder listings plus cover art), and a full
+	 * backlog makes the kernel drop connections, which clients only retry
+	 * after seconds to minutes. Let them wait in line instead. */
+	if (listen(s, SOMAXCONN) < 0)
 	{
 		DPRINTF(E_ERROR, L_GENERAL, "listen(http): %s\n", strerror(errno));
 		close(s);
@@ -577,7 +582,8 @@ init(int argc, char **argv)
 	int debug_flag = 0;
 	int default_log = 0;
 	int bad_option = 0;
-	int port_set = 0, uuid_set = 0, name_set = 0;
+	int port_set = 0, uuid_set = 0, name_set = 0, thumb_set = 0;
+	const char *video_ext = NULL, *audio_ext = NULL, *image_ext = NULL;
 	int port_pidfile_name;
 	const char *default_pidfile = pidfilename;
 	int verbose_flag = 0;
@@ -624,6 +630,8 @@ init(int argc, char **argv)
 	runtime_vars.max_connections = 50;
 	runtime_vars.root_container = BROWSEDIR_ID;	/* root_container=B */
 	runtime_vars.ifaces[0] = NULL;
+	runtime_vars.probe_limit = 30;
+	runtime_vars.probe_time = 500;
 
 #ifdef THUMBNAIL_CREATION
 	runtime_vars.thumb_width = 160;
@@ -934,12 +942,28 @@ init(int argc, char **argv)
 			else
 				SETFLAG(SUBTITLES_MASK);
 			break;
+		case PROBE_LIMIT:
+			runtime_vars.probe_limit = atoi(ary_options[i].value);
+			break;
+		case PROBE_TIME:
+			runtime_vars.probe_time = atoi(ary_options[i].value);
+			break;
+		case VIDEO_EXTENSIONS:
+			video_ext = ary_options[i].value;
+			break;
+		case AUDIO_EXTENSIONS:
+			audio_ext = ary_options[i].value;
+			break;
+		case IMAGE_EXTENSIONS:
+			image_ext = ary_options[i].value;
+			break;
 #ifdef THUMBNAIL_CREATION
 		case ENABLE_THUMB:
 			if( (strcmp(ary_options[i].value, "yes") == 0) || atoi(ary_options[i].value) )
 				SETFLAG(THUMB_MASK);
 			else
 				CLEARFLAG(THUMB_MASK);
+			thumb_set = 1;
 		break;
 		case THUMB_WIDTH:
 			runtime_vars.thumb_width = atoi(ary_options[i].value);
@@ -967,6 +991,12 @@ init(int argc, char **argv)
 				optionsfile ? optionsfile : "(command line)");
 		}
 	}
+	/* Set all three now, so the probing thread never sets them up lazily;
+	 * an empty value keeps the built-in list */
+	set_media_extensions(TYPE_VIDEO, (video_ext && *video_ext) ? video_ext : default_media_extensions(TYPE_VIDEO));
+	set_media_extensions(TYPE_AUDIO, (audio_ext && *audio_ext) ? audio_ext : default_media_extensions(TYPE_AUDIO));
+	set_media_extensions(TYPE_IMAGE, (image_ext && *image_ext) ? image_ext : default_media_extensions(TYPE_IMAGE));
+
 	if (!log_path[0])
 	{
 		strncpyt(log_path, DEFAULT_LOG_PATH, sizeof(log_path));
@@ -1244,7 +1274,14 @@ init(int argc, char **argv)
 			DPRINTF(E_WARN, L_GENERAL, "TiVo support needs a database (db_dir); disabling it\n");
 			CLEARFLAG(TIVO_MASK);
 		}
+#ifdef THUMBNAIL_CREATION
+		/* Thumbnails are only made for played files and small folders
+		 * here, so they are on unless switched off */
+		if (!thumb_set)
+			SETFLAG(THUMB_MASK);
+#endif
 	}
+	(void)thumb_set;
 
 	if (!port_pidfile_name && process_check_if_running(pidfilename) < 0)
 		DPRINTF(E_FATAL, L_GENERAL, SERVER_NAME " is already running. EXITING.\n");
@@ -1407,6 +1444,8 @@ main(int argc, char **argv)
 	{
 		/* Listings are sorted like the scanner's alphasort() */
 		setlocale(LC_COLLATE, "");
+		/* Learns metadata of opened folders and played files */
+		fsmeta_start();
 	}
 	else
 	{
@@ -1628,6 +1667,8 @@ shutdown:
 #ifdef HAVE_WATCH
 	monitor_stop();
 #endif
+	if (fs_mode())
+		fsmeta_stop();
 
 	/* kill other child processes */
 	process_reap_children();
