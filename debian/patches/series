@@ -6,3 +6,9 @@
 13-spelling-and-typos.patch
 14-autoupdate.patch
 15-thumbnails.patch
+16-live-folder-mode-without-database.patch
+17-defaults-run-as-invoking-user.patch
+18-cmdline-options-and-cwd-media-dir.patch
+19-readme-md.patch
+20-version-2.0.0.patch
+21-auto-http-port.patch

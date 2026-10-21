@@ -1,0 +1,212 @@
+Description: Default to root_container=B and to running as the invoking user
+ runtime_vars.root_container now defaults to "B" (Browse Directory). An empty
+ db_dir= selects live folder mode instead of failing, and an empty user=
+ keeps running as the user that started minidlnad.
+ .
+ When an ordinary user starts the daemon and cannot write the default log
+ directory or pid file location, per-user ones are used instead:
+ $XDG_STATE_HOME/minidlna (or ~/.local/state/minidlna) for the log and
+ $XDG_RUNTIME_DIR/minidlna for the pid file. Previously the daemon exited
+ silently after daemonizing. The sample configuration spells out the new
+ defaults: user=, db_dir=, inotify=yes, root_container=B.
+Forwarded: no
+Last-Update: 2026-10-21
+--- a/minidlna.c
++++ b/minidlna.c
+@@ -503,6 +503,24 @@ writepidfile(const char *fname, int pid,
+ 	return ret;
+ }
+ 
++/* Per-user fallback directory for an unprivileged daemon,
++ * e.g. $XDG_STATE_HOME/minidlna or ~/.local/state/minidlna */
++static int
++user_dir(char *buf, size_t len, const char *xdg_var, const char *home_sub)
++{
++	const char *base = getenv(xdg_var);
++	const char *home = getenv("HOME");
++
++	if (base && base[0] == '/')
++		snprintf(buf, len, "%s/minidlna", base);
++	else if (home && home[0] == '/')
++		snprintf(buf, len, "%s/%s/minidlna", home, home_sub);
++	else
++		return -1;
++
++	return make_dir(buf, S_IRWXU);
++}
++
+ static int strtobool(const char *str)
+ {
+ 	return ((strcasecmp(str, "yes") == 0) ||
+@@ -546,6 +564,8 @@ init(int argc, char **argv)
+ 	int i;
+ 	int pid;
+ 	int debug_flag = 0;
++	int default_log = 0;
++	const char *default_pidfile = pidfilename;
+ 	int verbose_flag = 0;
+ 	int options_flag = 0;
+ 	struct sigaction sa;
+@@ -588,7 +608,7 @@ init(int argc, char **argv)
+ 	runtime_vars.port = 8200;
+ 	runtime_vars.notify_interval = 895;	/* seconds between SSDP announces */
+ 	runtime_vars.max_connections = 50;
+-	runtime_vars.root_container = NULL;
++	runtime_vars.root_container = BROWSEDIR_ID;	/* root_container=B */
+ 	runtime_vars.ifaces[0] = NULL;
+ 
+ #ifdef THUMBNAIL_CREATION
+@@ -713,6 +733,12 @@ init(int argc, char **argv)
+ 			}
+ 			break;
+ 		case UPNPDBDIR:
++			/* An empty db_dir selects live folder mode */
++			if (!ary_options[i].value[0])
++			{
++				db_path[0] = '\0';
++				break;
++			}
+ 			path = realpath(ary_options[i].value, buf);
+ 			if (!path)
+ 				path = (ary_options[i].value);
+@@ -779,6 +805,12 @@ init(int argc, char **argv)
+ 			strcpy(uuidvalue+5, ary_options[i].value);
+ 			break;
+ 		case USER_ACCOUNT:
++			/* An empty user keeps running as the user that started us */
++			if (!ary_options[i].value[0])
++			{
++				uid = 0;
++				break;
++			}
+ 			uid = strtoul(ary_options[i].value, &string, 0);
+ 			if (*string)
+ 			{
+@@ -849,7 +881,10 @@ init(int argc, char **argv)
+ 		}
+ 	}
+ 	if (!log_path[0])
++	{
+ 		strncpyt(log_path, DEFAULT_LOG_PATH, sizeof(log_path));
++		default_log = 1;
++	}
+ 	/* db_path stays empty unless db_dir is set: live folder mode */
+ 
+ 	/* command line arguments processing */
+@@ -1037,6 +1072,28 @@ init(int argc, char **argv)
+ 	else if (!log_level)
+ 		log_level = log_str;
+ 
++	/* An ordinary user can't write the system log and pid locations, so
++	 * unless they were given explicitly, use per-user ones instead. */
++	if (geteuid() != 0)
++	{
++		static char user_pidfile[PATH_MAX + 16];
++		char dir[PATH_MAX];
++
++		if (default_log && access(log_path, W_OK) != 0 &&
++		    user_dir(dir, sizeof(dir), "XDG_STATE_HOME", ".local/state") == 0)
++			strncpyt(log_path, dir, sizeof(log_path));
++		if (pidfilename == default_pidfile)
++		{
++			strncpyt(dir, pidfilename, sizeof(dir));
++			if (access(dirname(dir), W_OK) != 0 &&
++			    user_dir(dir, sizeof(dir), "XDG_RUNTIME_DIR", ".local/state") == 0)
++			{
++				snprintf(user_pidfile, sizeof(user_pidfile), "%s/minidlna.pid", dir);
++				pidfilename = user_pidfile;
++			}
++		}
++	}
++
+ 	/* Set the default log to stdout */
+ 	if (debug_flag)
+ 	{
+--- a/minidlna.conf
++++ b/minidlna.conf
+@@ -5,7 +5,8 @@ port=8200
+ #network_interface=eth0
+ 
+ # specify the user account name or uid to run as
+-#user=jmaggard
++# if empty, minidlna keeps running as the user that started it
++user=
+ 
+ # set this to the directory you want scanned.
+ # * if you want multiple directories, you can have multiple media_dir= lines
+@@ -25,9 +26,10 @@ media_dir=/opt
+ #friendly_name=My DLNA Server
+ 
+ # set this if you would like to specify the directory where you want MiniDLNA to store its database and album art cache
+-# if unset, no database is built: folders are listed from disk when a client browses them
++# if empty, no database is built: folders are listed from disk when a client browses them
+ # (no Artist/Album/Genre views, search, thumbnails, durations or bookmarks)
+-#db_dir=/var/cache/minidlna
++# e.g. db_dir=/var/cache/minidlna
++db_dir=
+ 
+ # set this if you would like to specify the directory where you want MiniDLNA to store its log file
+ #log_dir=/var/log
+@@ -41,7 +43,7 @@ media_dir=/opt
+ album_art_names=Cover.jpg/cover.jpg/AlbumArtSmall.jpg/albumartsmall.jpg/AlbumArt.jpg/albumart.jpg/Album.jpg/album.jpg/Folder.jpg/folder.jpg/Thumb.jpg/thumb.jpg
+ 
+ # set this to no to disable inotify monitoring to automatically discover new files
+-# note: the default is yes
++# note: the default is yes; it has no effect when db_dir is empty
+ inotify=yes
+ 
+ # set this to yes to enable support for streaming .jpg and .mp3 files to a TiVo supporting HMO
+@@ -79,7 +81,8 @@ model_number=1
+ #   + "P" - "Pictures"
+ #   + Or, you can specify the ObjectID of your desired root container (eg. 1$F for Music/Playlists)
+ # if you specify "B" and client device is audio-only then "Music/Folders" will be used as root
+-#root_container=.
++# note: the default is "B"; it has no effect when db_dir is empty (the root is always the folder tree)
++root_container=B
+ 
+ # always force SortCriteria to this value, regardless of the SortCriteria passed by the client
+ # note: you can prepend the sort criteria with "!" to alter the titles of the objects so that they
+--- a/minidlna.conf.5
++++ b/minidlna.conf.5
+@@ -13,8 +13,14 @@ configuration file.
+ .SH OPTIONS
+ .PP
+ The following are user configurable options in /etc/minidlna.conf.
+-minidlna runs by default as user nobody, so make sure system permissions are 
+-set correctly for read access to media and write access to cache and log dirs.
++minidlna runs as the user that starts it unless \fBuser\fP is set, so make sure
++that user can read the media. An ordinary user that cannot write the default
++log and pid locations gets per-user ones under $XDG_STATE_HOME (or
++~/.local/state) and $XDG_RUNTIME_DIR.
++
++.IP "\fBuser\fP"
++User name or uid to switch to after starting. Empty (the default) keeps
++running as the user that started minidlna.
+ 
+ .IP "\fBfriendly_name\fP"
+ The name you want your media server seen as, EG: friendly_name=Home Media Server
+@@ -128,6 +134,7 @@ log_level=general,artwork,database,inoti
+ .IP "\fBinotify\fP"
+ Set to 'yes' to enable inotify monitoring of the files under media_dir 
+ to automatically discover new files. Set to 'no' to disable inotify.
++This is the default, and it has no effect when \fBdb_dir\fP is empty.
+ 
+ .IP "\fBalbum_art_names\fP"
+ This should be a list of file names to check for when searching for album art
+@@ -152,13 +159,14 @@ using Bonjour if Avahi support is availa
+ Use a different container as the root of the tree exposed to clients.
+ .nf
+ The possible values are:
+-             '.' to use the standard container (this is the default)
+-             'B' to use the "Browse Directory" container;
++             '.' to use the standard container;
++             'B' to use the "Browse Directory" container (this is the default);
+              'M' to use the "Music" container;
+              'V' to use the "Video" container;
+              'P' to use the "Pictures" container.
+   If you specify 'B' and the client device is audio only, then
+   "Music/Folders" will be used as root container and you wont see Videos.
++  Ignored when db_dir is empty: the root is then always the folder tree.
+ .fi
+ 
+ .IP "\fBforce_sort_criteria\fP"

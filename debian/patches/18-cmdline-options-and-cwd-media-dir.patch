@@ -1,0 +1,475 @@
+Description: Command line options for every setting; no config file without -f
+ Every minidlna.conf option can now be given on the command line as
+ --name=value or --name value ('-' and '_' interchangeable). Command line
+ values are applied after the config file so they win; the first command
+ line value of media_dir, album_art_names or network_interface replaces the
+ file's list. Unknown options print the usage and exit.
+ .
+ A configuration file is only read when given with -f, as the init scripts
+ do. Without -f, built-in defaults and command line options apply and
+ minidlnad serves the current directory ($PWD, or getcwd() if $PWD is
+ stale) as the invoking user. album_art_names now defaults to the list in
+ the shipped minidlna.conf instead of being empty.
+ .
+ wide_links now defaults to yes, and every yes/no option can be switched
+ both ways so a command line value can override the file. Option values may
+ be up to PATH_MAX long (was 200 bytes).
+Forwarded: no
+Last-Update: 2026-10-21
+--- a/minidlna.c
++++ b/minidlna.c
+@@ -565,12 +565,13 @@ init(int argc, char **argv)
+ 	int pid;
+ 	int debug_flag = 0;
+ 	int default_log = 0;
++	int bad_option = 0;
+ 	const char *default_pidfile = pidfilename;
+ 	int verbose_flag = 0;
+ 	int options_flag = 0;
+ 	struct sigaction sa;
+ 	const char * presurl = NULL;
+-	const char * optionsfile = "/etc/minidlna.conf";
++	const char * optionsfile = NULL;	/* only set by -f */
+ 	char mac_str[13];
+ 	char *string, *word;
+ 	char *path;
+@@ -618,13 +619,67 @@ init(int argc, char **argv)
+ 
+ 	/* read options file first since
+ 	 * command line arguments have final say */
+-	if (readoptionsfile(optionsfile) < 0)
++	/* A config file is only read when given with -f (as the init scripts
++	 * do); otherwise built-in defaults and command line options apply */
++	if (options_flag && readoptionsfile(optionsfile) < 0)
++		DPRINTF(E_FATAL, L_GENERAL, "Error reading configuration file %s\n", optionsfile);
++
++	/* Any config file option can be given as --name=value or --name value;
++	 * these are applied after the config file, so they win */
++	for (i = 1; i < argc; i++)
+ 	{
+-		/* only error if file exists or using -f */
+-		if(access(optionsfile, F_OK) == 0 || options_flag)
+-			DPRINTF(E_FATAL, L_GENERAL, "Error reading configuration file %s\n", optionsfile);
++		char name[64];
++		const char *value;
++		size_t len;
++
++		if (strncmp(argv[i], "--", 2) != 0 || strcmp(argv[i], "--help") == 0)
++			continue;
++		value = strchr(argv[i], '=');
++		len = value ? (size_t)(value - argv[i] - 2) : strlen(argv[i] + 2);
++		if (len >= sizeof(name))
++			len = sizeof(name) - 1;
++		memcpy(name, argv[i] + 2, len);
++		name[len] = '\0';
++		if (value)
++			value++;
++		else if (i + 1 < argc)
++			value = argv[++i];
++		else
++			DPRINTF(E_FATAL, L_GENERAL, "Option --%s takes one argument.\n", name);
++		if (addoption(name, value) != 0)
++		{
++			DPRINTF(E_ERROR, L_GENERAL, "Unknown option: --%s\n", name);
++			bad_option = 1;
++		}
+ 	}
+ 
++	if (!options_flag)
++	{
++		for (i = 0; i < num_options && ary_options[i].id != UPNPMEDIADIR; i++)
++			;
++		if (i == num_options)
++		{
++			/* $PWD keeps the path the user sees (symlinks); fall back to
++			 * getcwd() if it is missing or stale */
++			const char *pwd = getenv("PWD");
++			struct stat pst, dst;
++
++			if (!pwd || pwd[0] != '/' || stat(pwd, &pst) != 0 || stat(".", &dst) != 0 ||
++			    pst.st_dev != dst.st_dev || pst.st_ino != dst.st_ino)
++				pwd = getcwd(buf, sizeof(buf));
++			if (pwd)
++				addoption("media_dir", pwd);
++		}
++	}
++
++	/* Without album_art_names nothing is found, so default to the list in
++	 * the shipped minidlna.conf */
++	for (i = 0; i < num_options && ary_options[i].id != UPNPALBUMART_NAMES; i++)
++		;
++	if (i == num_options)
++		addoption("album_art_names", "Cover.jpg/cover.jpg/AlbumArtSmall.jpg/albumartsmall.jpg/"
++		          "AlbumArt.jpg/albumart.jpg/Album.jpg/album.jpg/Folder.jpg/folder.jpg/Thumb.jpg/thumb.jpg");
++
+ 	for (i=0; i<num_options; i++)
+ 	{
+ 		switch (ary_options[i].id)
+@@ -761,14 +816,20 @@ init(int argc, char **argv)
+ 		case UPNPINOTIFY:
+ 			if (!strtobool(ary_options[i].value))
+ 				CLEARFLAG(INOTIFY_MASK);
++			else
++				SETFLAG(INOTIFY_MASK);
+ 			break;
+ 		case ENABLE_TIVO:
+ 			if (strtobool(ary_options[i].value))
+ 				SETFLAG(TIVO_MASK);
++			else
++				CLEARFLAG(TIVO_MASK);
+ 			break;
+ 		case ENABLE_DLNA_STRICT:
+ 			if (strtobool(ary_options[i].value))
+ 				SETFLAG(DLNA_STRICT_MASK);
++			else
++				CLEARFLAG(DLNA_STRICT_MASK);
+ 			break;
+ 		case ROOT_CONTAINER:
+ 			switch (ary_options[i].value[0]) {
+@@ -838,10 +899,14 @@ init(int argc, char **argv)
+ 		case MERGE_MEDIA_DIRS:
+ 			if (strtobool(ary_options[i].value))
+ 				SETFLAG(MERGE_MEDIA_DIRS_MASK);
++			else
++				CLEARFLAG(MERGE_MEDIA_DIRS_MASK);
+ 			break;
+ 		case WIDE_LINKS:
+ 			if (strtobool(ary_options[i].value))
+ 				SETFLAG(WIDE_LINKS_MASK);
++			else
++				CLEARFLAG(WIDE_LINKS_MASK);
+ 			break;
+ 		case TIVO_DISCOVERY:
+ 			if (strcasecmp(ary_options[i].value, "beacon") == 0)
+@@ -850,11 +915,15 @@ init(int argc, char **argv)
+ 		case ENABLE_SUBTITLES:
+ 			if (!strtobool(ary_options[i].value))
+ 				CLEARFLAG(SUBTITLES_MASK);
++			else
++				SETFLAG(SUBTITLES_MASK);
+ 			break;
+ #ifdef THUMBNAIL_CREATION
+ 		case ENABLE_THUMB:
+ 			if( (strcmp(ary_options[i].value, "yes") == 0) || atoi(ary_options[i].value) )
+ 				SETFLAG(THUMB_MASK);
++			else
++				CLEARFLAG(THUMB_MASK);
+ 		break;
+ 		case THUMB_WIDTH:
+ 			runtime_vars.thumb_width = atoi(ary_options[i].value);
+@@ -873,11 +942,13 @@ init(int argc, char **argv)
+ 		case ENABLE_THUMB_FILMSTRIP:
+ 			if( (strcmp(ary_options[i].value, "yes") == 0) || atoi(ary_options[i].value) )
+ 				SETFLAG(THUMB_FILMSTRIP);
++			else
++				CLEARFLAG(THUMB_FILMSTRIP);
+ 		break;
+ #endif
+ 		default:
+ 			DPRINTF(E_ERROR, L_GENERAL, "Unknown option in file %s\n",
+-				optionsfile);
++				optionsfile ? optionsfile : "(command line)");
+ 		}
+ 	}
+ 	if (!log_path[0])
+@@ -899,6 +970,12 @@ init(int argc, char **argv)
+ 			runtime_vars.port = -1;
+ 			break;
+ 		}
++		else if (strncmp(argv[i], "--", 2) == 0)
++		{
++			/* Config file options, already handled above */
++			if (!strchr(argv[i], '='))
++				i++;
++		}
+ 		else switch(argv[i][1])
+ 		{
+ 		case 't':
+@@ -1035,7 +1112,7 @@ init(int argc, char **argv)
+ 		}
+ 	}
+ 
+-	if (runtime_vars.port <= 0)
++	if (runtime_vars.port <= 0 || bad_option)
+ 	{
+ 		printf("Usage:\n\t"
+ 			"%s [-d] [-v] [-f config_file] [-p port]\n"
+@@ -1047,7 +1124,18 @@ init(int argc, char **argv)
+ #else
+ 			"\t\t[-w url] [-r] [-R] [-L] [-V] [-h]\n"
+ #endif
++			"\t\t[--option=value | --option value]...\n"
+ 			"\nNotes:\n\tNotify interval is in seconds. Default is 895 seconds.\n"
++			"\tWithout -f no config file is read (not even /etc/minidlna.conf):\n"
++			"\tbuilt-in defaults and command line options apply, and the current\n"
++			"\tdirectory is served as the current user unless --media_dir is given.\n"
++			"\t--option=value sets any config file option and overrides the file,\n"
++			"\te.g. --media_dir=V,/srv/videos --db_dir= --port=8201. Repeating\n"
++			"\t--media_dir, --album_art_names or --network_interface replaces the\n"
++			"\tfile's values. '-' may be used for '_'. Options:\n",
++			argv[0]);
++		printoptionnames(stdout);
++		printf("\n"
+ 			"\tDefault pid file is %s.\n"
+ 			"\tWith -d minidlna will run in debug mode (not daemonize).\n"
+ 			"\t-w sets the presentation url. Default is http address on port 80\n"
+@@ -1060,7 +1148,7 @@ init(int argc, char **argv)
+ 			"\t-S changes behaviour for systemd/launchd\n"
+ #endif
+ 			"\t-V print the version number\n",
+-			argv[0], pidfilename);
++			pidfilename);
+ 		return 1;
+ 	}
+ 
+--- a/minidlna.conf
++++ b/minidlna.conf
+@@ -94,8 +94,9 @@ root_container=B
+ # note: many clients open several simultaneous connections while streaming
+ #max_connections=50
+ 
+-# set this to yes to allow symlinks that point outside user-defined media_dirs.
+-#wide_links=no
++# set this to no to hide symlinks that point outside user-defined media_dirs.
++# note: the default is yes
++wide_links=yes
+ 
+ # enable subtitle support by default on unknown clients.
+ # note: the default is yes
+--- a/minidlna.conf.5
++++ b/minidlna.conf.5
+@@ -6,9 +6,10 @@ minidlna
+ .PP
+ .B minidlna
+ is a light weight but very functional DLNA server. In most cases, the defaults 
+-do not need modifications. The global configuration file is /etc/minidlna.conf 
+-but local users without system root access can run minidlna with their own 
+-configuration file.
++do not need modifications. A configuration file is only read when given with
++\-f; the minidlna service uses /etc/minidlna.conf. Local users without system
++root access can run minidlna with their own configuration file, or with no
++file and \-\-option=value command line options instead.
+ 
+ .SH OPTIONS
+ .PP
+@@ -183,8 +184,8 @@ force_sort_criteria=+upnp:class,+upnp:or
+ .fi
+ 
+ .IP "\fBwide_links\fP"
+-Set to 'yes' to allow symlinks that point outside user-defined media_dirs.
+-By default, wide symlinks are not followed.
++Set to 'no' to hide symlinks that point outside user-defined media_dirs.
++By default ('yes'), wide symlinks are followed.
+ 
+ .IP "\fBenable_subtitles\fP"
+ Set to 'no' to disable subtitle support on unknown clients.
+--- a/minidlnad.8
++++ b/minidlnad.8
+@@ -24,11 +24,23 @@ But there may be times when you need to
+ you can do this by running minidlna with the following command line switches.
+ .fi
+ 
++Without \fB\-f\fR, no configuration file is read, not even /etc/minidlna.conf:
++built-in defaults and command line options apply, and minidlna serves the
++current directory ($PWD) as the user who started it.
++
++.IP "\fB\-\-\fR\fIoption\fR\fB=\fR\fIvalue\fR, \fB\-\-\fR\fIoption value\fR"
++Set any minidlna.conf option, overriding the file, e.g.
++\-\-media_dir=V,/srv/videos \-\-db_dir= \-\-port=8201. '-' may be used
++instead of '_' in option names. Giving \-\-media_dir, \-\-album_art_names or
++\-\-network_interface replaces the values from the file; repeat the option
++for several values.
++
+ .IP "\fB\-R\fR \fIRescan\fR"
+ This forces minidlna to rescan all of the media_dir directories.
+ 
+ .IP "\fB\-f\fR \fIconfig_file\fR"
+-Run minidlna with a different configuration file than the global default.
++Read this configuration file. Without \fB\-f\fR no file is read; the
++minidlna service passes \fB\-f /etc/minidlna.conf\fR.
+ 
+ .IP "\fB\-p\fR \fIport\fR"
+ Allows to run minidlna on a different port.
+--- a/options.c
++++ b/options.c
+@@ -80,7 +80,7 @@ int
+ readoptionsfile(const char * fname)
+ {
+ 	FILE *hfile = NULL;
+-	char buffer[1024];
++	char buffer[MAX_OPTION_VALUE_LEN + 64];
+ 	char *equals;
+ 	char *name;
+ 	char *value;
+@@ -188,6 +188,114 @@ readoptionsfile(const char * fname)
+ 	return 0;
+ }
+ 
++static enum upnpconfigoptions
++lookup_option(const char *name)
++{
++	char key[64];
++	size_t i;
++
++	if (strlen(name) >= sizeof(key))
++		return UPNP_INVALID;
++	for (i = 0; name[i]; i++)
++		key[i] = (name[i] == '-') ? '_' : name[i];
++	key[i] = '\0';
++
++	for (i = 0; i < sizeof(optionids)/sizeof(optionids[0]); i++)
++	{
++		if (strcmp(key, optionids[i].name) == 0)
++			return optionids[i].id;
++	}
++
++	return UPNP_INVALID;
++}
++
++static int
++is_list_option(enum upnpconfigoptions id)
++{
++	return id == UPNPMEDIADIR || id == UPNPALBUMART_NAMES || id == UPNPIFNAME;
++}
++
++/* Drop the values of one option stored at indices [start, end) */
++static int
++remove_range(enum upnpconfigoptions id, int start, int end)
++{
++	int i, n = start;
++
++	for (i = start; i < num_options; i++)
++	{
++		if (i < end && ary_options[i].id == id)
++			continue;
++		ary_options[n++] = ary_options[i];
++	}
++	i = num_options - n;
++	num_options = n;
++
++	return i;
++}
++
++void
++removeoptions(enum upnpconfigoptions id)
++{
++	remove_range(id, 0, num_options);
++}
++
++int
++addoption(const char * name, const char * value)
++{
++	static int first_cmdline = -1;
++	enum upnpconfigoptions id = lookup_option(name);
++	struct option *t;
++	int i;
++
++	if (id == UPNP_INVALID)
++		return -1;
++	if (first_cmdline < 0)
++		first_cmdline = num_options;
++
++	/* The first command line value of a list replaces the config file's */
++	if (is_list_option(id))
++	{
++		for (i = first_cmdline; i < num_options; i++)
++		{
++			if (ary_options[i].id == id)
++				break;
++		}
++		if (i == num_options)
++			first_cmdline -= remove_range(id, 0, first_cmdline);
++	}
++
++	t = realloc(ary_options, (num_options + 1) * sizeof(struct option));
++	if (!t)
++		return -1;
++	ary_options = t;
++	ary_options[num_options].id = id;
++	strncpyt(ary_options[num_options].value, value, MAX_OPTION_VALUE_LEN);
++	num_options++;
++
++	return 0;
++}
++
++void
++printoptionnames(FILE * f)
++{
++	size_t i;
++	int col = 8;
++
++	fprintf(f, "\t");
++	for (i = 0; i < sizeof(optionids)/sizeof(optionids[0]); i++)
++	{
++		int len = strlen(optionids[i].name) + 2;
++		if (col + len > 78)
++		{
++			fprintf(f, "\n\t");
++			col = 8;
++		}
++		fprintf(f, "%s%s", optionids[i].name,
++		        (i + 1 < sizeof(optionids)/sizeof(optionids[0])) ? ", " : "\n");
++		col += len;
++	}
++}
++
+ void
+ freeoptions(void)
+ {
+--- a/options.h
++++ b/options.h
+@@ -31,6 +31,8 @@
+ #define __OPTIONS_H__
+ 
+ #include "config.h"
++#include <stdio.h>
++#include <limits.h>
+ 
+ /* enum of option available in the miniupnpd.conf */
+ enum upnpconfigoptions {
+@@ -75,12 +77,32 @@ enum upnpconfigoptions {
+ int
+ readoptionsfile(const char * fname);
+ 
+-/* freeoptions() 
++/* addoption()
++ * store an option given on the command line as --name=value ('-' and '_'
++ * are interchangeable in name). The first command line value of a
++ * repeatable option (media_dir, album_art_names, network_interface)
++ * replaces the values read from the config file.
++ * returns: 0 success, -1 unknown option */
++int
++addoption(const char * name, const char * value);
++
++/* removeoptions()
++ * drop every stored value of one option */
++void
++removeoptions(enum upnpconfigoptions id);
++
++/* printoptionnames()
++ * list the option names, for the usage text */
++void
++printoptionnames(FILE * f);
++
++/* freeoptions()
+  * frees memory allocated to option values */
+ void
+ freeoptions(void);
+ 
+-#define MAX_OPTION_VALUE_LEN (200)
++/* Long enough for a media_dir path */
++#define MAX_OPTION_VALUE_LEN (PATH_MAX + 8)
+ struct option
+ {
+ 	enum upnpconfigoptions id;
+--- a/upnpglobalvars.c
++++ b/upnpglobalvars.c
+@@ -58,7 +58,7 @@
+ time_t startup_time = 0;
+ 
+ struct runtime_vars_s runtime_vars;
+-uint32_t runtime_flags = INOTIFY_MASK | TIVO_BONJOUR_MASK | SUBTITLES_MASK;
++uint32_t runtime_flags = INOTIFY_MASK | TIVO_BONJOUR_MASK | SUBTITLES_MASK | WIDE_LINKS_MASK;
+ 
+ const char *pidfilename = "/run/minidlna/minidlna.pid";
+ 

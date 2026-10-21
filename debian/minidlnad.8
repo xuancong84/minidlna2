@@ -35,6 +35,7 @@
 .Op Fl S
 .Op Fl L
 .Op Fl R
+.Op Fl - Ns Ar option Ns = Ns Ar value ...
 .Pp
 .Nm
 .Op Fl h \*[Ba] Fl V
@@ -55,17 +56,48 @@ option, or in the configuration file through the
 .Cm network_interface
 option
 .Pq see Xr minidlna.conf 5 for details .
+.Pp
+A configuration file is only read when given with
+.Fl f ,
+as the
+.Nm minidlna
+service does with
+.Pa /etc/minidlna.conf .
+Started from a shell without
+.Fl f ,
+.Nm
+reads no file at all: built-in defaults and command line options apply, and it
+serves the current directory
+.Pq Ev PWD
+as the user who started it.
 .Sh OPTIONS
 Most of the options below can also be set in a configuration file, as described
 in
 .Xr minidlna.conf 5 .
 .Bl -tag -width Ds
+.It Fl - Ns Ar option Ns = Ns Ar value , Fl - Ns Ar option Ar value
+Set any configuration file option, overriding the file, e.g.
+.Fl -media_dir Ns =V,/srv/videos
+.Fl -db_dir Ns =
+.Fl -port Ns =8201 .
+.Ql -
+may be used instead of
+.Ql _
+in option names. Giving
+.Fl -media_dir ,
+.Fl -album_art_names
+or
+.Fl -network_interface
+replaces the values from the file; repeat the option for several values.
 .It Fl d
 Activate debug mode (do not daemonize).
 .It Fl f Ar config_file
-Specify the location of the configuration file. Uses
-.Pa /etc/minidlna.conf
-by default.
+Read this configuration file. Without
+.Fl f
+no file is read; the
+.Nm minidlna
+service passes
+.Fl f Pa /etc/minidlna.conf .
 .It Fl h
 Show help and exit.
 .It Fl i Ar interface
@@ -75,14 +107,28 @@ Do not create playlists.
 .It Fl m Ar model_number
 Model number the daemon will report to clients in its XML description.
 .It Fl P Ar pid_filename
-PID file to use; the default is
-.Pa /run/minidlna/minidlna.pid .
+PID file to use. Without
+.Fl P
+it is
+.Pa minidlna- Ns Ar port Ns Pa .pid
+in
+.Pa /run/minidlna ,
+or in
+.Pa $XDG_RUNTIME_DIR/minidlna
+for ordinary users, so several instances can run at once.
 .It Fl p Ar port
-Port number to listen on.
+Port number to listen on, used exactly. Without a port, the first free port
+from 8200 upwards is used.
 .It Fl R
 Forces a full rescan of the media files. First it will remove all cached data and database. Any bookmarks will be lost.
+Ignored when no
+.Cm db_dir
+is set.
 .It Fl r
 Do a non-destructive rescan of the media files on start-up.
+Ignored when no
+.Cm db_dir
+is set.
 .It Fl S
 Stay foreground. Can be used when
 .Nm

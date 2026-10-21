@@ -31,6 +31,8 @@
 #define __OPTIONS_H__
 
 #include "config.h"
+#include <stdio.h>
+#include <limits.h>
 
 /* enum of option available in the miniupnpd.conf */
 enum upnpconfigoptions {
@@ -75,12 +77,32 @@ enum upnpconfigoptions {
 int
 readoptionsfile(const char * fname);
 
-/* freeoptions() 
+/* addoption()
+ * store an option given on the command line as --name=value ('-' and '_'
+ * are interchangeable in name). The first command line value of a
+ * repeatable option (media_dir, album_art_names, network_interface)
+ * replaces the values read from the config file.
+ * returns: 0 success, -1 unknown option */
+int
+addoption(const char * name, const char * value);
+
+/* removeoptions()
+ * drop every stored value of one option */
+void
+removeoptions(enum upnpconfigoptions id);
+
+/* printoptionnames()
+ * list the option names, for the usage text */
+void
+printoptionnames(FILE * f);
+
+/* freeoptions()
  * frees memory allocated to option values */
 void
 freeoptions(void);
 
-#define MAX_OPTION_VALUE_LEN (200)
+/* Long enough for a media_dir path */
+#define MAX_OPTION_VALUE_LEN (PATH_MAX + 8)
 struct option
 {
 	enum upnpconfigoptions id;

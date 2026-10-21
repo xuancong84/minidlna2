@@ -60,6 +60,7 @@
 #include <netinet/in.h>
 #include <netdb.h>
 #include <ctype.h>
+#include <time.h>
 
 #include "event.h"
 #include "upnpglobalvars.h"
@@ -71,6 +72,7 @@
 #include "getifaddr.h"
 #include "scanner.h"
 #include "sql.h"
+#include "fsbrowse.h"
 #include "log.h"
 
 #ifdef __sparc__ /* Sorting takes too long on slow processors with very large containers */
@@ -298,11 +300,15 @@ GetSearchCapabilities(struct upnphttp * h, const char * action)
 		  "@refID"
 		"</SearchCaps>"
 		"</u:%sResponse>";
+	static const char resp_nosearch[] =
+		"<u:%sResponse xmlns:u=\"%s\">"
+		"<SearchCaps></SearchCaps>"
+		"</u:%sResponse>";
 
 	char body[512];
 	int bodylen;
 
-	bodylen = snprintf(body, sizeof(body), resp,
+	bodylen = snprintf(body, sizeof(body), fs_mode() ? resp_nosearch : resp,
 		action, "urn:schemas-upnp-org:service:ContentDirectory:1",
 		action);
 	BuildSendAndCloseSoapResp(h, body, bodylen);
@@ -929,7 +935,8 @@ callback(void *args, int argc, char **argv, char **azColName)
 			if( (passed_args->flags & FLAG_CAPTION_RES) ||
 			    (passed_args->filter & (FILTER_SEC_CAPTION_INFO_EX|FILTER_PV_SUBTITLE)) )
 			{
-				if( sql_get_int_field(db, "SELECT ID from CAPTIONS where ID = '%s'", detailID) > 0 )
+				if( fs_mode() ? passed_args->has_captions :
+				    sql_get_int_field(db, "SELECT ID from CAPTIONS where ID = '%s'", detailID) > 0 )
 					passed_args->flags |= FLAG_HAS_CAPTIONS;
 			}
 			/* From what I read, Samsung TV's expect a [wrong] MIME type of x-mkv. */
@@ -1024,7 +1031,7 @@ callback(void *args, int argc, char **argv, char **azColName)
 		if( date && (passed_args->filter & FILTER_DC_DATE) ) {
 			ret = strcatf(str, "&lt;dc:date&gt;%s&lt;/dc:date&gt;", date);
 		}
-		if( (passed_args->filter & FILTER_BOOKMARK_MASK) ) {
+		if( (passed_args->filter & FILTER_BOOKMARK_MASK) && !fs_mode() ) {
 			/* Get bookmark */
 			int sec = sql_get_int_field(db, "SELECT SEC from BOOKMARKS where ID = '%s'", detailID);
 			if( sec > 0 ) {
@@ -1080,7 +1087,7 @@ callback(void *args, int argc, char **argv, char **azColName)
 			add_res(size, duration, bitrate, sampleFrequency, nrAudioChannels,
 			        resolution, dlna_buf, mime, detailID, ext, passed_args);
 			if( *mime == 'i' ) {
-				int srcw, srch;
+				int srcw = 0, srch = 0;
 				if( resolution && (sscanf(resolution, "%6dx%6d", &srcw, &srch) == 2) )
 				{
 					if( srcw > 4096 || srch > 4096 )
@@ -1097,7 +1104,8 @@ callback(void *args, int argc, char **argv, char **azColName)
 					                   mime, "DLNA.ORG_PN=JPEG_TN;DLNA.ORG_CI=1", lan_addr[passed_args->iface].str,
 					                   runtime_vars.port, detailID);
 				}
-				else
+				/* No resolution (live folder mode) means nothing to scale from */
+				else if( srcw && srch )
 					add_resized_res(srcw, srch, 160, 160, "JPEG_TN", detailID, passed_args);
 			}
 			else if( *mime == 'v' ) {
@@ -1238,13 +1246,14 @@ callback(void *args, int argc, char **argv, char **azColName)
 	{
 		ret = strcatf(str, "&lt;container id=\"%s\" parentID=\"%s\" restricted=\"1\" ", id, parent);
 		if( passed_args->filter & FILTER_SEARCHABLE ) {
-			ret = strcatf(str, "searchable=\"%d\" ", check_magic_container(id, passed_args->flags) ? 0 : 1);
+			ret = strcatf(str, "searchable=\"%d\" ", (fs_mode() || check_magic_container(id, passed_args->flags)) ? 0 : 1);
 		}
-		if( passed_args->filter & FILTER_CHILDCOUNT ) {
+		/* Counting children in live folder mode would cost a readdir per folder */
+		if( (passed_args->filter & FILTER_CHILDCOUNT) && !fs_mode() ) {
 			ret = strcatf(str, "childCount=\"%d\"", get_child_count(id, check_magic_container(id, passed_args->flags)));
 		}
 		/* If the client calls for BrowseMetadata on root, we have to include our "upnp:searchClass"'s, unless they're filtered out */
-		if( passed_args->requested == 1 && strcmp(id, "0") == 0 && (passed_args->filter & FILTER_UPNP_SEARCHCLASS) ) {
+		if( passed_args->requested == 1 && strcmp(id, "0") == 0 && (passed_args->filter & FILTER_UPNP_SEARCHCLASS) && !fs_mode() ) {
 			ret = strcatf(str, "&gt;"
 			                   "&lt;upnp:searchClass includeDerived=\"1\"&gt;object.item.audioItem&lt;/upnp:searchClass&gt;"
 			                   "&lt;upnp:searchClass includeDerived=\"1\"&gt;object.item.imageItem&lt;/upnp:searchClass&gt;"
@@ -1291,6 +1300,137 @@ callback(void *args, int argc, char **argv, char **azColName)
 		}
 		ret = strcatf(str, "&lt;/container&gt;");
 	}
+
+	return 0;
+}
+
+/* Live folder mode: feed one filesystem entry through callback() as if it
+ * were a database row, so the DIDL output and client quirks stay shared. */
+static int
+fs_send_row(struct Response *args, const char *id, const char *parent, const char *class,
+            const char *name, const char *mime, const struct stat *st, int album_art)
+{
+	char *argv[25] = { NULL };
+	char size[24], date[32], mimebuf[64];
+	char *title;
+	struct tm tm;
+	int ret;
+
+	title = escape_tag(name, 1);
+	if( !title )
+		return 1;
+	if( strncmp(class, "item", 4) == 0 )
+		strip_ext(title);
+	argv[0] = (char *)id;
+	argv[1] = (char *)parent;
+	argv[3] = (char *)id;
+	argv[4] = (char *)class;
+	argv[6] = title;
+	if( st )
+	{
+		snprintf(size, sizeof(size), "%jd", (intmax_t)st->st_size);
+		argv[5] = size;
+		/* localtime_r() doesn't re-read the zone file on every call */
+		if( localtime_r(&st->st_mtime, &tm) &&
+		    strftime(date, sizeof(date), "%Y-%m-%dT%H:%M:%S", &tm) )
+			argv[16] = date;
+	}
+	if( mime )
+	{
+		strncpyt(mimebuf, mime, sizeof(mimebuf));
+		argv[21] = mimebuf;
+	}
+	if( album_art )
+		argv[22] = "1";
+
+	ret = callback(args, 25, argv, NULL);
+	free(title);
+
+	return ret;
+}
+
+static int
+BrowseLiveFolder(struct Response *args, const char *ObjectID, int metadata,
+                 int StartingIndex, int RequestedCount, int *totalMatches)
+{
+	static const char *folder = "container.storageFolder";
+	struct fs_object obj;
+	struct fs_listing list;
+	char id[FS_ID_MAX], parent[FS_ID_MAX];
+	char buf[PATH_MAX];
+	const char *mime, *class, *name;
+	struct stat st;
+	long long end;
+	int i, dfd, art, ret = 0;
+
+	if( fs_resolve(ObjectID, &obj) != 0 )
+		return -1;
+
+	if( metadata )
+	{
+		fs_object_id(id, sizeof(id), &obj);
+		fs_parent_id(parent, sizeof(parent), &obj);
+		*totalMatches = 1;
+		if( obj.idx < 0 )
+		{
+			fs_send_row(args, id, parent, folder, "root", NULL, NULL, 0);
+			return 0;
+		}
+		name = strrchr(obj.path, '/');
+		name = (name && name[1]) ? name + 1 : obj.path;
+		if( S_ISDIR(obj.st.st_mode) )
+		{
+			fs_send_row(args, id, parent, folder, name, NULL, NULL, 1);
+			return 0;
+		}
+		mime = fs_mime(name, obj.types, &class);
+		if( !mime )
+			return -1;
+		art = (*mime != 'i') && fs_find_art(obj.path, 0, buf, sizeof(buf)) == 0;
+		args->has_captions = (*mime == 'v') && fs_find_caption(obj.path, buf, sizeof(buf)) == 0;
+		fs_send_row(args, id, parent, class, name, mime, &obj.st, art);
+		return 0;
+	}
+
+	if( fs_list(&obj, &list) != 0 )
+	{
+		fs_free_listing(&list);
+		return -1;
+	}
+	*totalMatches = list.count;
+	fs_object_id(parent, sizeof(parent), &obj);
+	end = (RequestedCount < 0) ? list.count : (long long)StartingIndex + RequestedCount;
+	if( end > list.count )
+		end = list.count;
+
+	/* Only the requested page is stat()ed */
+	for( i = StartingIndex; i < end && !ret; i++ )
+	{
+		struct fs_entry *e = &list.ents[i];
+
+		if( e->top )
+		{
+			fs_make_id(id, sizeof(id), e->idx, NULL, NULL);
+			ret = fs_send_row(args, id, "0", folder, e->name, NULL, NULL, 1);
+			continue;
+		}
+		fs_make_id(id, sizeof(id), e->idx, obj.idx < 0 ? NULL : obj.rel, e->name);
+		if( e->is_dir )
+		{
+			/* Folder art is looked up only if the client asks for it */
+			ret = fs_send_row(args, id, parent, folder, e->name, NULL, NULL, 1);
+			continue;
+		}
+		mime = fs_mime(e->name, fs_media_types(e->idx), &class);
+		if( !mime )
+			continue;
+		dfd = list.dfd[e->idx];
+		art = (*mime != 'i') && (list.has_art || fs_has_file_art(dfd, e->name));
+		args->has_captions = (*mime == 'v') && fs_has_captions(dfd, e->name);
+		ret = fs_send_row(args, id, parent, class, e->name, mime,
+		                  fstatat(dfd, e->name, &st, 0) == 0 ? &st : NULL, art);
+	}
+	fs_free_listing(&list);
 
 	return 0;
 }
@@ -1388,6 +1528,19 @@ BrowseContentDirectory(struct upnphttp * h, const char * action)
 	                         " * SortCriteria: %s\n",
 				ObjectID, RequestedCount, StartingIndex,
 	                        BrowseFlag, Filter, SortCriteria);
+
+	if( fs_mode() )
+	{
+		int metadata = (strcmp(BrowseFlag+6, "Metadata") == 0);
+		if( metadata )
+			args.requested = 1;
+		if( BrowseLiveFolder(&args, ObjectID, metadata, StartingIndex, RequestedCount, &totalMatches) != 0 )
+		{
+			SoapError(h, 701, "No such object error");
+			goto browse_error;
+		}
+		goto browse_reply;
+	}
 
 	if( strcmp(BrowseFlag+6, "Metadata") == 0 )
 	{
@@ -1512,6 +1665,7 @@ BrowseContentDirectory(struct upnphttp * h, const char * action)
 			goto browse_error;
 		}
 	}
+browse_reply:
 	ret = strcatf(&str, "&lt;/DIDL-Lite&gt;</Result>\n"
 	                    "<NumberReturned>%u</NumberReturned>\n"
 	                    "<TotalMatches>%u</TotalMatches>\n"
@@ -1895,6 +2049,13 @@ SearchContentDirectory(struct upnphttp * h, const char * action)
 				ContainerID, RequestedCount, StartingIndex,
 	                        SearchCriteria, Filter, SortCriteria);
 
+	/* Searching would mean walking the whole tree */
+	if( fs_mode() )
+	{
+		totalMatches = 0;
+		goto search_reply;
+	}
+
 	magic = check_magic_container(ContainerID, args.flags);
 	if (magic && magic->objectid && *(magic->objectid))
 		ContainerID = *(magic->objectid);
@@ -1961,6 +2122,7 @@ SearchContentDirectory(struct upnphttp * h, const char * action)
 		sqlite3_free(zErrMsg);
 	}
 	sqlite3_free(sql);
+search_reply:
 	ret = strcatf(&str, "&lt;/DIDL-Lite&gt;</Result>\n"
 	                    "<NumberReturned>%u</NumberReturned>\n"
 	                    "<TotalMatches>%u</TotalMatches>\n"
@@ -2117,6 +2279,14 @@ static void UpdateObject(struct upnphttp * h, const char * action)
 	_kodi_decode(ObjectID);
 	DPRINTF(E_DEBUG, L_HTTP, "UpdateObject %s: %s => %s\n", ObjectID, CurrentTagValue, NewTagValue);
 
+	/* No database to keep bookmarks or watch counts in */
+	if (fs_mode())
+	{
+		BuildSendAndCloseSoapResp(h, resp, sizeof(resp)-1);
+		ClearNameValueList(&data);
+		return;
+	}
+
 	in_magic_container(ObjectID, 0, &rid);
 	detailID = sql_get_int64_field(db, "SELECT DETAIL_ID from OBJECTS where OBJECT_ID = '%q'", rid);
 	if (detailID <= 0)
@@ -2193,7 +2363,9 @@ SamsungGetFeatureList(struct upnphttp * h, const char * action)
 	char body[1024];
 	int len;
 
-	if (runtime_vars.root_container)
+	if (fs_mode())
+		audio = video = image = "0";
+	else if (runtime_vars.root_container)
 	{
 		if (strcmp(runtime_vars.root_container, BROWSEDIR_ID) == 0)
 		{
@@ -2236,7 +2408,10 @@ SamsungSetBookmark(struct upnphttp * h, const char * action)
 	ObjectID = GetValueFromNameValueList(&data, "ObjectID");
 	PosSecond = GetValueFromNameValueList(&data, "PosSecond");
 
-	if( ObjectID && PosSecond )
+	/* No database to keep bookmarks in */
+	if( fs_mode() && ObjectID && PosSecond )
+		BuildSendAndCloseSoapResp(h, resp, sizeof(resp)-1);
+	else if( ObjectID && PosSecond )
 	{
 		const char *rid = ObjectID;
 		int64_t detailID;

@@ -76,6 +76,7 @@
 #include "image_utils.h"
 #include "log.h"
 #include "sql.h"
+#include "fsbrowse.h"
 #include <libexif/exif-loader.h>
 #include "tivo_utils.h"
 #include "tivo_commands.h"
@@ -624,21 +625,28 @@ SendResp_presentation(struct upnphttp * h)
 
 	h->respflags = FLAG_HTML;
 
-	a = sql_get_int_field(db, "SELECT count(*) from DETAILS where MIME glob 'a*'");
-	v = sql_get_int_field(db, "SELECT count(*) from DETAILS where MIME glob 'v*'");
-	p = sql_get_int_field(db, "SELECT count(*) from DETAILS where MIME glob 'i*'");
 	strcatf(&str,
 		"<HTML><HEAD><TITLE>" SERVER_NAME " " MINIDLNA_VERSION "</TITLE><meta http-equiv=\"refresh\" content=\"20\"></HEAD>"
 		"<BODY><div style=\"text-align: center\">"
 		"<h2>" SERVER_NAME " status</h2></div>");
 
-	strcatf(&str,
-		"<h3>Media library</h3>"
-		"<table border=1 cellpadding=10>"
-		"<tr><td>Audio files</td><td>%d</td></tr>"
-		"<tr><td>Video files</td><td>%d</td></tr>"
-		"<tr><td>Image files</td><td>%d</td></tr>"
-		"</table>", a, v, p);
+	if (fs_mode())
+		strcatf(&str,
+			"<h3>Media library</h3>"
+			"Live folder mode (no database): folders are listed on request.");
+	else
+	{
+		a = sql_get_int_field(db, "SELECT count(*) from DETAILS where MIME glob 'a*'");
+		v = sql_get_int_field(db, "SELECT count(*) from DETAILS where MIME glob 'v*'");
+		p = sql_get_int_field(db, "SELECT count(*) from DETAILS where MIME glob 'i*'");
+		strcatf(&str,
+			"<h3>Media library</h3>"
+			"<table border=1 cellpadding=10>"
+			"<tr><td>Audio files</td><td>%d</td></tr>"
+			"<tr><td>Video files</td><td>%d</td></tr>"
+			"<tr><td>Image files</td><td>%d</td></tr>"
+			"</table>", a, v, p);
+	}
 
 	if (GETFLAG(SCANNING_MASK))
 		strcatf(&str,
@@ -842,7 +850,7 @@ static void
 ProcessHttpQuery_upnphttp(struct upnphttp * h)
 {
 	char HttpCommand[16];
-	char HttpUrl[512];
+	char HttpUrl[4096];	/* live folder mode URLs carry an encoded path */
 	char * HttpVer;
 	char * p;
 	int i;
@@ -854,7 +862,7 @@ ProcessHttpQuery_upnphttp(struct upnphttp * h)
 	HttpCommand[i] = '\0';
 	while(*p==' ')
 		p++;
-	for(i = 0; i<511 && *p && *p != ' ' && *p != '\r'; i++)
+	for(i = 0; i<(int)sizeof(HttpUrl)-1 && *p && *p != ' ' && *p != '\r'; i++)
 		HttpUrl[i] = *(p++);
 	HttpUrl[i] = '\0';
 	while(*p==' ')
@@ -1420,7 +1428,8 @@ _open_file(const char *orig_path)
 			if (strncmp(path, media_path->path, strlen(media_path->path)) == 0)
 				break;
 		}
-		if (!media_path && strncmp(path, db_path, strlen(db_path)))
+		/* An empty db_path (live folder mode) must not match everything */
+		if (!media_path && (!db_path[0] || strncmp(path, db_path, strlen(db_path))))
 		{
 			DPRINTF(E_ERROR, L_HTTP, "Rejecting wide link %s -> %s\n",
 						orig_path, path);
@@ -1435,6 +1444,19 @@ _open_file(const char *orig_path)
 		DPRINTF(E_ERROR, L_HTTP, "Error opening %s\n", path);
 
 	return fd;
+}
+
+/* Live folder mode: map a URL token "<id>.<ext>" back to its object */
+static int
+fs_url_object(const char *token, struct fs_object *obj)
+{
+	char id[FS_ID_MAX];
+
+	if (fs_token_to_id(token, id, sizeof(id)) != 0 ||
+	    fs_resolve(id, obj) != 0 || obj->idx < 0)
+		return -1;
+
+	return 0;
 }
 
 static void
@@ -1513,7 +1535,22 @@ SendResp_albumArt(struct upnphttp * h, char * object)
 
 	id = strtoll(object, NULL, 10);
 
-	path = sql_get_text_field(db, "SELECT PATH from ALBUM_ART where ID = '%lld'", id);
+	if( fs_mode() )
+	{
+		struct fs_object obj;
+		char art[PATH_MAX];
+
+		/* "1-<id>.jpg" from DIDL, or "<id>.<ext>?albumArt=true" for MS clients */
+		if( strncmp(object, "1-", 2) == 0 )
+			object += 2;
+		if( fs_url_object(object, &obj) == 0 &&
+		    fs_find_art(obj.path, S_ISDIR(obj.st.st_mode), art, sizeof(art)) == 0 )
+			path = sqlite3_mprintf("%s", art);
+		else
+			path = NULL;
+	}
+	else
+		path = sql_get_text_field(db, "SELECT PATH from ALBUM_ART where ID = '%lld'", id);
 	if( !path )
 	{
 		DPRINTF(E_WARN, L_HTTP, "ALBUM_ART ID %s not found, responding ERROR 404\n", object);
@@ -1563,7 +1600,19 @@ SendResp_caption(struct upnphttp * h, char * object)
 
 	id = strtoll(object, NULL, 10);
 
-	path = sql_get_text_field(db, "SELECT PATH from CAPTIONS where ID = %lld", id);
+	if( fs_mode() )
+	{
+		struct fs_object obj;
+		char caption[PATH_MAX];
+
+		if( fs_url_object(object, &obj) == 0 && S_ISREG(obj.st.st_mode) &&
+		    fs_find_caption(obj.path, caption, sizeof(caption)) == 0 )
+			path = sqlite3_mprintf("%s", caption);
+		else
+			path = NULL;
+	}
+	else
+		path = sql_get_text_field(db, "SELECT PATH from CAPTIONS where ID = %lld", id);
 	if( !path )
 	{
 		DPRINTF(E_WARN, L_HTTP, "CAPTION ID %s not found, responding ERROR 404\n", object);
@@ -1608,6 +1657,13 @@ SendResp_thumbnail(struct upnphttp * h, char * object)
 	ExifData *ed;
 	ExifLoader *l;
 	struct string_s str;
+
+	/* Live folder mode never advertises thumbnails */
+	if( fs_mode() )
+	{
+		Send404(h);
+		return;
+	}
 
 	if( h->reqflags & (FLAG_XFERSTREAMING|FLAG_RANGE) )
 	{
@@ -1687,6 +1743,13 @@ SendResp_resizedimg(struct upnphttp * h, char * object)
 	image_s *imsrc = NULL, *imdst = NULL;
 	int scale = 1;
 	const char *tmode;
+
+	/* No resolution is known in live folder mode, so nothing to scale */
+	if( fs_mode() )
+	{
+		Send404(h);
+		return;
+	}
 
 	id = strtoll(object, &saveptr, 10);
 	snprintf(buf, sizeof(buf), "SELECT PATH, RESOLUTION, ROTATION from DETAILS where ID = '%lld'", (long long)id);
@@ -1896,9 +1959,33 @@ resized_error:
 }
 
 static void
+client_mime_quirks(char *mime, uint32_t cflags, enum client_types ctype)
+{
+	/* From what I read, Samsung TV's expect a [wrong] MIME type of x-mkv. */
+	if( cflags & FLAG_SAMSUNG )
+	{
+		if( strcmp(mime+6, "x-matroska") == 0 )
+			strcpy(mime+8, "mkv");
+		/* Samsung TV's such as the A750 can natively support many
+		   Xvid/DivX AVI's however, the DLNA server needs the
+		   mime type to say video/mpeg */
+		else if( ctype == ESamsungSeriesA && strcmp(mime+6, "x-msvideo") == 0 )
+			strcpy(mime+6, "mpeg");
+	}
+	/* ... and Sony BDP-S370 won't play MKV unless we pretend it's a DiVX file */
+	else if( ctype == ESonyBDP )
+	{
+		if( strcmp(mime+6, "x-matroska") == 0 ||
+		    strcmp(mime+6, "mpeg") == 0 )
+			strcpy(mime+6, "divx");
+	}
+}
+
+static void
 SendResp_dlnafile(struct upnphttp *h, char *object)
 {
-	char header[1024];
+	char header[1024 + FS_ID_MAX];
+	char fs_id[FS_ID_MAX] = "";
 	struct string_s str;
 	char buf[128];
 	char **result;
@@ -1921,7 +2008,37 @@ SendResp_dlnafile(struct upnphttp *h, char *object)
 #endif
 
 	id = strtoll(object, NULL, 10);
-	if( cflags & FLAG_MS_PFS )
+	if( fs_mode() )
+	{
+		struct fs_object obj;
+		const char *name, *mime = NULL;
+
+		if( (cflags & FLAG_MS_PFS) && strstr(object, "?albumArt=true") )
+		{
+			SendResp_albumArt(h, object);
+			return;
+		}
+		/* Only serve files that would show up in a listing */
+		if( fs_token_to_id(object, fs_id, sizeof(fs_id)) == 0 &&
+		    fs_resolve(fs_id, &obj) == 0 && obj.idx >= 0 && S_ISREG(obj.st.st_mode) )
+		{
+			name = strrchr(obj.path, '/') + 1;
+			mime = fs_mime(name, obj.types, NULL);
+		}
+		if( !mime )
+		{
+			DPRINTF(E_WARN, L_HTTP, "%s not found, responding ERROR 404\n", object);
+			Send404(h);
+			return;
+		}
+		last_file.id = 0;
+		last_file.client = ctype;
+		memcpy(last_file.path, obj.path, sizeof(last_file.path));
+		strncpyt(last_file.mime, mime, sizeof(last_file.mime));
+		client_mime_quirks(last_file.mime, cflags, ctype);
+		last_file.dlna[0] = '\0';
+	}
+	else if( cflags & FLAG_MS_PFS )
 	{
 		if( strstr(object, "?albumArt=true") )
 		{
@@ -1937,7 +2054,7 @@ SendResp_dlnafile(struct upnphttp *h, char *object)
 			return;
 		}
 	}
-	if( id != last_file.id || ctype != last_file.client )
+	if( !fs_mode() && (id != last_file.id || ctype != last_file.client) )
 	{
 		snprintf(buf, sizeof(buf), "SELECT PATH, MIME, DLNA_PN from DETAILS where ID = '%lld'", (long long)id);
 		ret = sql_get_table(db, buf, &result, &rows, NULL);
@@ -1961,24 +2078,7 @@ SendResp_dlnafile(struct upnphttp *h, char *object)
 		if( result[4] )
 		{
 			strncpy(last_file.mime, result[4], sizeof(last_file.mime)-1);
-			/* From what I read, Samsung TV's expect a [wrong] MIME type of x-mkv. */
-			if( cflags & FLAG_SAMSUNG )
-			{
-				if( strcmp(last_file.mime+6, "x-matroska") == 0 )
-					strcpy(last_file.mime+8, "mkv");
-				/* Samsung TV's such as the A750 can natively support many
-				   Xvid/DivX AVI's however, the DLNA server needs the 
-				   mime type to say video/mpeg */
-				else if( ctype == ESamsungSeriesA && strcmp(last_file.mime+6, "x-msvideo") == 0 )
-					strcpy(last_file.mime+6, "mpeg");
-			}
-			/* ... and Sony BDP-S370 won't play MKV unless we pretend it's a DiVX file */
-			else if( ctype == ESonyBDP )
-			{
-				if( strcmp(last_file.mime+6, "x-matroska") == 0 ||
-				    strcmp(last_file.mime+6, "mpeg") == 0 )
-					strcpy(last_file.mime+6, "divx");
-			}
+			client_mime_quirks(last_file.mime, cflags, ctype);
 		}
 		if( result[5] )
 			snprintf(last_file.dlna, sizeof(last_file.dlna), "DLNA.ORG_PN=%s;", result[5]);
@@ -2101,7 +2201,15 @@ SendResp_dlnafile(struct upnphttp *h, char *object)
 
 	if( h->reqflags & FLAG_CAPTION )
 	{
-		if( sql_get_int_field(db, "SELECT ID from CAPTIONS where ID = '%lld'", (long long)id) > 0 )
+		char caption[PATH_MAX];
+
+		if( fs_mode() )
+		{
+			if( fs_find_caption(last_file.path, caption, sizeof(caption)) == 0 )
+				strcatf(&str, "CaptionInfo.sec: http://%s:%d/Captions/%s.srt\r\n",
+				              lan_addr[h->iface].str, runtime_vars.port, fs_id);
+		}
+		else if( sql_get_int_field(db, "SELECT ID from CAPTIONS where ID = '%lld'", (long long)id) > 0 )
 			strcatf(&str, "CaptionInfo.sec: http://%s:%d/Captions/%lld.srt\r\n",
 			              lan_addr[h->iface].str, runtime_vars.port, (long long)id);
 	}

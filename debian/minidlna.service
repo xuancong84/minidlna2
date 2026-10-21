@@ -4,9 +4,7 @@ Documentation=man:minidlnad(1) man:minidlna.conf(5)
 After=local-fs.target remote-fs.target autofs.service
 
 [Service]
-User=minidlna
-Group=minidlna
-
+# Runs as root; set user= in minidlna.conf to drop privileges after start-up.
 Environment=CONFIGFILE=/etc/minidlna.conf
 Environment=DAEMON_OPTS=-r
 EnvironmentFile=-/etc/default/minidlna

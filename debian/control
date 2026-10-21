@@ -23,8 +23,7 @@ Vcs-Browser: https://salsa.debian.org/debian/minidlna
 
 Package: minidlna
 Architecture: any
-Depends: adduser,
-         ${misc:Depends},
+Depends: ${misc:Depends},
          ${shlibs:Depends}
 Pre-Depends: ${misc:Pre-Depends}
 Description: lightweight DLNA/UPnP-AV server targeted at embedded systems

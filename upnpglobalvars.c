@@ -58,7 +58,7 @@
 time_t startup_time = 0;
 
 struct runtime_vars_s runtime_vars;
-uint32_t runtime_flags = INOTIFY_MASK | TIVO_BONJOUR_MASK | SUBTITLES_MASK;
+uint32_t runtime_flags = INOTIFY_MASK | TIVO_BONJOUR_MASK | SUBTITLES_MASK | WIDE_LINKS_MASK;
 
 const char *pidfilename = "/run/minidlna/minidlna.pid";
 

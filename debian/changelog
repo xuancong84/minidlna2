@@ -1,3 +1,17 @@
+minidlna (2.0.0-1) noble; urgency=medium
+
+  * Version 2.0.0, based on Debian minidlna 1.3.3+dfsg-1build2.
+  * Live folder mode: with db_dir empty, folders are read from disk when a
+    client browses them; no database, scanner or inotify (patch 16).
+  * Default root_container=B; run as the invoking user. The package no
+    longer creates a minidlna system user; the service runs as root
+    (patch 17, packaging).
+  * --option=value for every config option; without -f the current
+    directory is served; wide_links=yes by default (patch 18).
+  * Add README.md (patch 19); report version 2.0.0 (patch 20).
+
+ -- xuancong <xuancong.wang@moht.com.sg>  Wed, 21 Oct 2026 13:30:18 +0800
+
 minidlna (1.3.3+dfsg-1build2) noble; urgency=medium
 
   * No-change rebuild for CVE-2024-3094

@@ -68,6 +68,7 @@
 #include <libgen.h>
 #include <pwd.h>
 #include <grp.h>
+#include <locale.h>
 
 #include "config.h"
 
@@ -92,6 +93,7 @@
 #include "upnpevents.h"
 #include "scanner.h"
 #include "monitor.h"
+#include "fsbrowse.h"
 #include "libav.h"
 #include "log.h"
 #include "tivo_beacon.h"
@@ -104,6 +106,13 @@
 #endif
 
 static LIST_HEAD(httplisthead, upnphttp) upnphttphead;
+
+#define DEFAULT_HTTP_PORT 8200
+/* How many ports past the default to try when it is in use */
+#define HTTP_PORT_TRIES 100
+
+/* Opened in init(), after daemonizing, so the port is known early */
+static int http_socket = -1;
 
 /* OpenAndConfHTTPSocket() :
  * setup the socket used to handle incoming HTTP connections. */
@@ -134,8 +143,12 @@ OpenAndConfHTTPSocket(unsigned short port)
 
 	if (bind(s, (struct sockaddr *)&listenname, sizeof(struct sockaddr_in)) < 0)
 	{
-		DPRINTF(E_ERROR, L_GENERAL, "bind(http): %s\n", strerror(errno));
+		/* A busy port is the caller's to report; keep errno for it */
+		int err = errno;
+		if (err != EADDRINUSE)
+			DPRINTF(E_ERROR, L_GENERAL, "bind(http): %s\n", strerror(err));
 		close(s);
+		errno = err;
 		return -1;
 	}
 
@@ -501,6 +514,24 @@ writepidfile(const char *fname, int pid, uid_t uid)
 	return ret;
 }
 
+/* Per-user fallback directory for an unprivileged daemon,
+ * e.g. $XDG_STATE_HOME/minidlna or ~/.local/state/minidlna */
+static int
+user_dir(char *buf, size_t len, const char *xdg_var, const char *home_sub)
+{
+	const char *base = getenv(xdg_var);
+	const char *home = getenv("HOME");
+
+	if (base && base[0] == '/')
+		snprintf(buf, len, "%s/minidlna", base);
+	else if (home && home[0] == '/')
+		snprintf(buf, len, "%s/%s/minidlna", home, home_sub);
+	else
+		return -1;
+
+	return make_dir(buf, S_IRWXU);
+}
+
 static int strtobool(const char *str)
 {
 	return ((strcasecmp(str, "yes") == 0) ||
@@ -544,11 +575,16 @@ init(int argc, char **argv)
 	int i;
 	int pid;
 	int debug_flag = 0;
+	int default_log = 0;
+	int bad_option = 0;
+	int port_set = 0, uuid_set = 0, name_set = 0;
+	int port_pidfile_name;
+	const char *default_pidfile = pidfilename;
 	int verbose_flag = 0;
 	int options_flag = 0;
 	struct sigaction sa;
 	const char * presurl = NULL;
-	const char * optionsfile = "/etc/minidlna.conf";
+	const char * optionsfile = NULL;	/* only set by -f */
 	char mac_str[13];
 	char *string, *word;
 	char *path;
@@ -583,10 +619,10 @@ init(int argc, char **argv)
 
 	getfriendlyname(friendly_name, FRIENDLYNAME_MAX_LEN);
 	
-	runtime_vars.port = 8200;
+	runtime_vars.port = DEFAULT_HTTP_PORT;
 	runtime_vars.notify_interval = 895;	/* seconds between SSDP announces */
 	runtime_vars.max_connections = 50;
-	runtime_vars.root_container = NULL;
+	runtime_vars.root_container = BROWSEDIR_ID;	/* root_container=B */
 	runtime_vars.ifaces[0] = NULL;
 
 #ifdef THUMBNAIL_CREATION
@@ -596,12 +632,66 @@ init(int argc, char **argv)
 
 	/* read options file first since
 	 * command line arguments have final say */
-	if (readoptionsfile(optionsfile) < 0)
+	/* A config file is only read when given with -f (as the init scripts
+	 * do); otherwise built-in defaults and command line options apply */
+	if (options_flag && readoptionsfile(optionsfile) < 0)
+		DPRINTF(E_FATAL, L_GENERAL, "Error reading configuration file %s\n", optionsfile);
+
+	/* Any config file option can be given as --name=value or --name value;
+	 * these are applied after the config file, so they win */
+	for (i = 1; i < argc; i++)
 	{
-		/* only error if file exists or using -f */
-		if(access(optionsfile, F_OK) == 0 || options_flag)
-			DPRINTF(E_FATAL, L_GENERAL, "Error reading configuration file %s\n", optionsfile);
+		char name[64];
+		const char *value;
+		size_t len;
+
+		if (strncmp(argv[i], "--", 2) != 0 || strcmp(argv[i], "--help") == 0)
+			continue;
+		value = strchr(argv[i], '=');
+		len = value ? (size_t)(value - argv[i] - 2) : strlen(argv[i] + 2);
+		if (len >= sizeof(name))
+			len = sizeof(name) - 1;
+		memcpy(name, argv[i] + 2, len);
+		name[len] = '\0';
+		if (value)
+			value++;
+		else if (i + 1 < argc)
+			value = argv[++i];
+		else
+			DPRINTF(E_FATAL, L_GENERAL, "Option --%s takes one argument.\n", name);
+		if (addoption(name, value) != 0)
+		{
+			DPRINTF(E_ERROR, L_GENERAL, "Unknown option: --%s\n", name);
+			bad_option = 1;
+		}
 	}
+
+	if (!options_flag)
+	{
+		for (i = 0; i < num_options && ary_options[i].id != UPNPMEDIADIR; i++)
+			;
+		if (i == num_options)
+		{
+			/* $PWD keeps the path the user sees (symlinks); fall back to
+			 * getcwd() if it is missing or stale */
+			const char *pwd = getenv("PWD");
+			struct stat pst, dst;
+
+			if (!pwd || pwd[0] != '/' || stat(pwd, &pst) != 0 || stat(".", &dst) != 0 ||
+			    pst.st_dev != dst.st_dev || pst.st_ino != dst.st_ino)
+				pwd = getcwd(buf, sizeof(buf));
+			if (pwd)
+				addoption("media_dir", pwd);
+		}
+	}
+
+	/* Without album_art_names nothing is found, so default to the list in
+	 * the shipped minidlna.conf */
+	for (i = 0; i < num_options && ary_options[i].id != UPNPALBUMART_NAMES; i++)
+		;
+	if (i == num_options)
+		addoption("album_art_names", "Cover.jpg/cover.jpg/AlbumArtSmall.jpg/albumartsmall.jpg/"
+		          "AlbumArt.jpg/albumart.jpg/Album.jpg/album.jpg/Folder.jpg/folder.jpg/Thumb.jpg/thumb.jpg");
 
 	for (i=0; i<num_options; i++)
 	{
@@ -623,6 +713,7 @@ init(int argc, char **argv)
 			break;
 		case UPNPPORT:
 			runtime_vars.port = atoi(ary_options[i].value);
+			port_set = 1;
 			break;
 		case UPNPPRESENTATIONURL:
 			presurl = ary_options[i].value;
@@ -641,6 +732,7 @@ init(int argc, char **argv)
 			break;
 		case UPNPFRIENDLYNAME:
 			strncpyt(friendly_name, ary_options[i].value, FRIENDLYNAME_MAX_LEN);
+			name_set = 1;
 			break;
 		case UPNPMEDIADIR:
 			types = ALL_MEDIA;
@@ -711,6 +803,12 @@ init(int argc, char **argv)
 			}
 			break;
 		case UPNPDBDIR:
+			/* An empty db_dir selects live folder mode */
+			if (!ary_options[i].value[0])
+			{
+				db_path[0] = '\0';
+				break;
+			}
 			path = realpath(ary_options[i].value, buf);
 			if (!path)
 				path = (ary_options[i].value);
@@ -733,14 +831,20 @@ init(int argc, char **argv)
 		case UPNPINOTIFY:
 			if (!strtobool(ary_options[i].value))
 				CLEARFLAG(INOTIFY_MASK);
+			else
+				SETFLAG(INOTIFY_MASK);
 			break;
 		case ENABLE_TIVO:
 			if (strtobool(ary_options[i].value))
 				SETFLAG(TIVO_MASK);
+			else
+				CLEARFLAG(TIVO_MASK);
 			break;
 		case ENABLE_DLNA_STRICT:
 			if (strtobool(ary_options[i].value))
 				SETFLAG(DLNA_STRICT_MASK);
+			else
+				CLEARFLAG(DLNA_STRICT_MASK);
 			break;
 		case ROOT_CONTAINER:
 			switch (ary_options[i].value[0]) {
@@ -775,8 +879,15 @@ init(int argc, char **argv)
 			break;
 		case UPNPUUID:
 			strcpy(uuidvalue+5, ary_options[i].value);
+			uuid_set = 1;
 			break;
 		case USER_ACCOUNT:
+			/* An empty user keeps running as the user that started us */
+			if (!ary_options[i].value[0])
+			{
+				uid = 0;
+				break;
+			}
 			uid = strtoul(ary_options[i].value, &string, 0);
 			if (*string)
 			{
@@ -804,10 +915,14 @@ init(int argc, char **argv)
 		case MERGE_MEDIA_DIRS:
 			if (strtobool(ary_options[i].value))
 				SETFLAG(MERGE_MEDIA_DIRS_MASK);
+			else
+				CLEARFLAG(MERGE_MEDIA_DIRS_MASK);
 			break;
 		case WIDE_LINKS:
 			if (strtobool(ary_options[i].value))
 				SETFLAG(WIDE_LINKS_MASK);
+			else
+				CLEARFLAG(WIDE_LINKS_MASK);
 			break;
 		case TIVO_DISCOVERY:
 			if (strcasecmp(ary_options[i].value, "beacon") == 0)
@@ -816,11 +931,15 @@ init(int argc, char **argv)
 		case ENABLE_SUBTITLES:
 			if (!strtobool(ary_options[i].value))
 				CLEARFLAG(SUBTITLES_MASK);
+			else
+				SETFLAG(SUBTITLES_MASK);
 			break;
 #ifdef THUMBNAIL_CREATION
 		case ENABLE_THUMB:
 			if( (strcmp(ary_options[i].value, "yes") == 0) || atoi(ary_options[i].value) )
 				SETFLAG(THUMB_MASK);
+			else
+				CLEARFLAG(THUMB_MASK);
 		break;
 		case THUMB_WIDTH:
 			runtime_vars.thumb_width = atoi(ary_options[i].value);
@@ -839,17 +958,21 @@ init(int argc, char **argv)
 		case ENABLE_THUMB_FILMSTRIP:
 			if( (strcmp(ary_options[i].value, "yes") == 0) || atoi(ary_options[i].value) )
 				SETFLAG(THUMB_FILMSTRIP);
+			else
+				CLEARFLAG(THUMB_FILMSTRIP);
 		break;
 #endif
 		default:
 			DPRINTF(E_ERROR, L_GENERAL, "Unknown option in file %s\n",
-				optionsfile);
+				optionsfile ? optionsfile : "(command line)");
 		}
 	}
 	if (!log_path[0])
+	{
 		strncpyt(log_path, DEFAULT_LOG_PATH, sizeof(log_path));
-	if (!db_path[0])
-		strncpyt(db_path, DEFAULT_DB_PATH, sizeof(db_path));
+		default_log = 1;
+	}
+	/* db_path stays empty unless db_dir is set: live folder mode */
 
 	/* command line arguments processing */
 	for (i=1; i<argc; i++)
@@ -862,6 +985,12 @@ init(int argc, char **argv)
 		{
 			runtime_vars.port = -1;
 			break;
+		}
+		else if (strncmp(argv[i], "--", 2) == 0)
+		{
+			/* Config file options, already handled above */
+			if (!strchr(argv[i], '='))
+				i++;
 		}
 		else switch(argv[i][1])
 		{
@@ -885,7 +1014,10 @@ init(int argc, char **argv)
 			break;
 		case 'p':
 			if (i+1 < argc)
+			{
 				runtime_vars.port = atoi(argv[++i]);
+				port_set = 1;
+			}
 			else
 				DPRINTF(E_FATAL, L_GENERAL, "Option -%c takes one argument.\n", argv[i][1]);
 			break;
@@ -939,6 +1071,11 @@ init(int argc, char **argv)
 			SETFLAG(RESCAN_MASK);
 			break;
 		case 'R':
+			if (fs_mode())
+			{
+				DPRINTF(E_WARN, L_GENERAL, "No db_dir set, ignoring -R\n");
+				break;
+			}
 			snprintf(buf, sizeof(buf), "rm -rf %s/files.db %s/art_cache", db_path, db_path);
 			if (system(buf) != 0)
 				DPRINTF(E_FATAL, L_GENERAL, "Failed to clean old file cache %s. EXITING\n", db_path);
@@ -994,7 +1131,7 @@ init(int argc, char **argv)
 		}
 	}
 
-	if (runtime_vars.port <= 0)
+	if (runtime_vars.port <= 0 || bad_option)
 	{
 		printf("Usage:\n\t"
 			"%s [-d] [-v] [-f config_file] [-p port]\n"
@@ -1006,8 +1143,21 @@ init(int argc, char **argv)
 #else
 			"\t\t[-w url] [-r] [-R] [-L] [-V] [-h]\n"
 #endif
+			"\t\t[--option=value | --option value]...\n"
 			"\nNotes:\n\tNotify interval is in seconds. Default is 895 seconds.\n"
-			"\tDefault pid file is %s.\n"
+			"\tWithout -f no config file is read (not even /etc/minidlna.conf):\n"
+			"\tbuilt-in defaults and command line options apply, and the current\n"
+			"\tdirectory is served as the current user unless --media_dir is given.\n"
+			"\t--option=value sets any config file option and overrides the file,\n"
+			"\te.g. --media_dir=V,/srv/videos --db_dir= --port=8201. Repeating\n"
+			"\t--media_dir, --album_art_names or --network_interface replaces the\n"
+			"\tfile's values. '-' may be used for '_'. Options:\n",
+			argv[0]);
+		printoptionnames(stdout);
+		printf("\n"
+			"\tWithout a port setting, the first free port from 8200 is used.\n"
+			"\tWithout -P, the pid file is minidlna-<port>.pid in /run/minidlna\n"
+			"\t(in $XDG_RUNTIME_DIR/minidlna for ordinary users).\n"
 			"\tWith -d minidlna will run in debug mode (not daemonize).\n"
 			"\t-w sets the presentation url. Default is http address on port 80\n"
 			"\t-v enables verbose output\n"
@@ -1018,8 +1168,7 @@ init(int argc, char **argv)
 #if defined(__linux__) || defined(__APPLE__)
 			"\t-S changes behaviour for systemd/launchd\n"
 #endif
-			"\t-V print the version number\n",
-			argv[0], pidfilename);
+			"\t-V print the version number\n");
 		return 1;
 	}
 
@@ -1030,6 +1179,32 @@ init(int argc, char **argv)
 	}
 	else if (!log_level)
 		log_level = log_str;
+
+	/* Without -P the pid file is named after the HTTP port, so several
+	 * instances can run side by side */
+	port_pidfile_name = (pidfilename == default_pidfile);
+
+	/* An ordinary user can't write the system log and pid locations, so
+	 * unless they were given explicitly, use per-user ones instead. */
+	if (geteuid() != 0)
+	{
+		static char user_pidfile[PATH_MAX + 16];
+		char dir[PATH_MAX];
+
+		if (default_log && access(log_path, W_OK) != 0 &&
+		    user_dir(dir, sizeof(dir), "XDG_STATE_HOME", ".local/state") == 0)
+			strncpyt(log_path, dir, sizeof(log_path));
+		if (pidfilename == default_pidfile)
+		{
+			strncpyt(dir, pidfilename, sizeof(dir));
+			if (access(dirname(dir), W_OK) != 0 &&
+			    user_dir(dir, sizeof(dir), "XDG_RUNTIME_DIR", ".local/state") == 0)
+			{
+				snprintf(user_pidfile, sizeof(user_pidfile), "%s/minidlna.pid", dir);
+				pidfilename = user_pidfile;
+			}
+		}
+	}
 
 	/* Set the default log to stdout */
 	if (debug_flag)
@@ -1047,15 +1222,75 @@ init(int argc, char **argv)
 	else
 	{
 		pid = process_daemonize();
-		if (access(db_path, F_OK) != 0)
+		if (!fs_mode() && access(db_path, F_OK) != 0)
 			make_dir(db_path, S_ISVTX|S_IRWXU|S_IRWXG|S_IRWXO);
 	}
 	if (log_init(log_level) < 0)
 		DPRINTF(E_FATAL, L_GENERAL, "Failed to open log file '%s/" LOGFILE_NAME "': %s\n",
 			log_path, strerror(errno));
 
-	if (process_check_if_running(pidfilename) < 0)
+	if (fs_mode())
+	{
+		DPRINTF(E_WARN, L_GENERAL, "No db_dir set: live folder mode, no media database\n");
+		/* Nothing to keep up to date */
+		CLEARFLAG(INOTIFY_MASK);
+		if (GETFLAG(RESCAN_MASK))
+		{
+			DPRINTF(E_WARN, L_GENERAL, "No db_dir set, ignoring -r\n");
+			CLEARFLAG(RESCAN_MASK);
+		}
+		if (GETFLAG(TIVO_MASK))
+		{
+			DPRINTF(E_WARN, L_GENERAL, "TiVo support needs a database (db_dir); disabling it\n");
+			CLEARFLAG(TIVO_MASK);
+		}
+	}
+
+	if (!port_pidfile_name && process_check_if_running(pidfilename) < 0)
 		DPRINTF(E_FATAL, L_GENERAL, SERVER_NAME " is already running. EXITING.\n");
+
+	/* Claim the HTTP port. Unless a port was set, step past ports in use:
+	 * SSDP tells clients which port each server is on. */
+	for (i = runtime_vars.port; ; i++)
+	{
+		http_socket = OpenAndConfHTTPSocket(i);
+		if (http_socket >= 0)
+			break;
+		if (port_set || errno != EADDRINUSE ||
+		    i + 1 >= runtime_vars.port + HTTP_PORT_TRIES || i >= 65535)
+			DPRINTF(E_FATAL, L_GENERAL, "Failed to open socket for HTTP on port %d: %s. EXITING\n",
+				i, strerror(errno));
+	}
+	if (i != runtime_vars.port)
+		DPRINTF(E_WARN, L_GENERAL, "HTTP port %d is in use, using %d\n", runtime_vars.port, i);
+	runtime_vars.port = i;
+
+	if (port_pidfile_name)
+	{
+		static char port_pidfile[PATH_MAX + 32];
+		char dir[PATH_MAX];
+
+		strncpyt(dir, pidfilename, sizeof(dir));
+		snprintf(port_pidfile, sizeof(port_pidfile), "%s/minidlna-%d.pid",
+		         dirname(dir), runtime_vars.port);
+		pidfilename = port_pidfile;
+		if (process_check_if_running(pidfilename) < 0)
+			DPRINTF(E_FATAL, L_GENERAL, SERVER_NAME " is already running. EXITING.\n");
+	}
+
+	/* Another instance on this machine has the MAC-based UUID and the
+	 * default name: on other ports, look like a separate server */
+	if (runtime_vars.port != DEFAULT_HTTP_PORT)
+	{
+		if (!uuid_set)
+			snprintf(uuidvalue+5, UUIDVALUE_MAX_LEN-5, "4d696e69-444c-%04x-9d41-%s",
+			         runtime_vars.port, mac_str);
+		if (!name_set)
+		{
+			size_t len = strlen(friendly_name);
+			snprintf(friendly_name+len, FRIENDLYNAME_MAX_LEN-len, " [%d]", runtime_vars.port);
+		}
+	}
 
 	set_startup_time();
 
@@ -1086,7 +1321,7 @@ init(int argc, char **argv)
 	if (writepidfile(pidfilename, pid, uid) != 0)
 		pidfilename = NULL;
 
-	if (uid > 0)
+	if (uid > 0 && !fs_mode())
 	{
 		struct stat st;
 		if (stat(db_path, &st) == 0 && st.st_uid != uid && chown(db_path, uid, -1) != 0)
@@ -1168,15 +1403,23 @@ main(int argc, char **argv)
 
 	LIST_INIT(&upnphttphead);
 
-	ret = open_db(NULL);
-	if (ret == 0)
+	if (fs_mode())
 	{
-		updateID = sql_get_int_field(db, "SELECT VALUE from SETTINGS where KEY = 'UPDATE_ID'");
-		if (updateID == -1)
-			ret = -1;
+		/* Listings are sorted like the scanner's alphasort() */
+		setlocale(LC_COLLATE, "");
 	}
-	check_db(db, ret, &scanner_pid);
-	lastdbtime = _get_dbtime();
+	else
+	{
+		ret = open_db(NULL);
+		if (ret == 0)
+		{
+			updateID = sql_get_int_field(db, "SELECT VALUE from SETTINGS where KEY = 'UPDATE_ID'");
+			if (updateID == -1)
+				ret = -1;
+		}
+		check_db(db, ret, &scanner_pid);
+		lastdbtime = _get_dbtime();
+	}
 
 #ifdef HAVE_WATCH
 	if (!GETFLAG(SCANNING_MASK))
@@ -1204,10 +1447,8 @@ main(int argc, char **argv)
 		event_module.add(&ssdpev);
 	}
 
-	/* open socket for HTTP connections. */
-	shttpl = OpenAndConfHTTPSocket(runtime_vars.port);
-	if (shttpl < 0)
-		DPRINTF(E_FATAL, L_GENERAL, "Failed to open socket for HTTP. EXITING\n");
+	/* socket for HTTP connections, opened in init() */
+	shttpl = http_socket;
 	DPRINTF(E_WARN, L_GENERAL, "HTTP listening on port %d\n", runtime_vars.port);
 	httpev = (struct event ){ .fd = shttpl, .rdwr = EVENT_READ, .process = ProcessListen };
 	event_module.add(&httpev);
@@ -1323,7 +1564,7 @@ main(int argc, char **argv)
 
 		/* increment SystemUpdateID if the content database has changed,
 		 * and if there is an active HTTP connection, at most once every 2 seconds */
-		if (!LIST_EMPTY(&upnphttphead) &&
+		if (!fs_mode() && !LIST_EMPTY(&upnphttphead) &&
 		    (timeofday.tv_sec >= (lastupdatetime + 2)))
 		{
 			if (GETFLAG(SCANNING_MASK))
@@ -1394,8 +1635,11 @@ shutdown:
 
 	event_module.fini();
 
-	sql_exec(db, "UPDATE SETTINGS set VALUE = '%u' where KEY = 'UPDATE_ID'", updateID);
-	sqlite3_close(db);
+	if (!fs_mode())
+	{
+		sql_exec(db, "UPDATE SETTINGS set VALUE = '%u' where KEY = 'UPDATE_ID'", updateID);
+		sqlite3_close(db);
+	}
 
 	upnpevents_removeSubscribers();
 

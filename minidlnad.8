@@ -24,14 +24,27 @@ But there may be times when you need to temporarily alter some of these options,
 you can do this by running minidlna with the following command line switches.
 .fi
 
+Without \fB\-f\fR, no configuration file is read, not even /etc/minidlna.conf:
+built-in defaults and command line options apply, and minidlna serves the
+current directory ($PWD) as the user who started it.
+
+.IP "\fB\-\-\fR\fIoption\fR\fB=\fR\fIvalue\fR, \fB\-\-\fR\fIoption value\fR"
+Set any minidlna.conf option, overriding the file, e.g.
+\-\-media_dir=V,/srv/videos \-\-db_dir= \-\-port=8201. '-' may be used
+instead of '_' in option names. Giving \-\-media_dir, \-\-album_art_names or
+\-\-network_interface replaces the values from the file; repeat the option
+for several values.
+
 .IP "\fB\-R\fR \fIRescan\fR"
 This forces minidlna to rescan all of the media_dir directories.
 
 .IP "\fB\-f\fR \fIconfig_file\fR"
-Run minidlna with a different configuration file than the global default.
+Read this configuration file. Without \fB\-f\fR no file is read; the
+minidlna service passes \fB\-f /etc/minidlna.conf\fR.
 
 .IP "\fB\-p\fR \fIport\fR"
-Allows to run minidlna on a different port.
+Run minidlna on this port exactly. Without a port, the first free port from
+8200 upwards is used, and the default pid file is named minidlna-<port>.pid.
 
 .IP "\fB\-w\fR \fIpresentation_url\fR"
 Change the default presentation url address.

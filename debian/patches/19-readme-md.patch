@@ -1,0 +1,240 @@
+Description: Add README.md
+ Describes the local live-folder patches, building, installing, running
+ as a systemd service and running from the command line. Includes the
+ original README.
+Forwarded: not-needed
+Last-Update: 2026-10-21
+--- /dev/null
++++ b/README.md
+@@ -0,0 +1,231 @@
++# MiniDLNA (ReadyMedia) 2.0.0 — live folder edition
++
++This is the world's best-performance DLNA server that can handle giant media folder (e.g., 20TB), many thousands of files and nested folders within a single folder, giant media files (e.g., 8K VR videos), dynamic changes in folders/files, and fast program start-up.
++
++MiniDLNA is a UPnP-A/V and DLNA media server: it shares video, music and
++pictures with players on your network (VLC, Kodi, smart TVs, phones,
++consoles). Version 2.0.0 is the Debian `minidlna` 1.3.3 source package with local
++patches that let it run without a media database:
++
++| Patch | What it changes |
++|---|---|
++| `16-live-folder-mode-without-database.patch` | With `db_dir` empty, no database, scanner or inotify watcher. Each folder is read from disk when a client opens it. |
++| `17-defaults-run-as-invoking-user.patch` | `root_container=B` by default; empty `user=`/`db_dir=` accepted; per-user log and pid files for unprivileged runs. The package no longer creates a `minidlna` system user. |
++| `18-cmdline-options-and-cwd-media-dir.patch` | Every config option can be given as `--option=value`; without `-f` the current directory is served; `wide_links=yes` by default. |
++
++## Original README
++
++```
++MiniDLNA project
++(c) 2009 Justin Maggard
++Portions (c) 2006-2007 Thomas Bernard
++webpage: http://sourceforge.net/projects/minidlna/
++
++This directory contains the MiniDLNA daemon software.
++This software is subject to the conditions detailed in
++the LICENCE file provided with this distribution.
++
++Parts of the software including the discovery code are
++licensed under the BSD revised license which is detailed
++in the LICENSE.miniupnpd file provided with the distribution.
++More information on MiniUPnPd can be found at http://miniupnp.free.fr.
++
++
++The MiniDLNA daemon is an UPnP-A/V and DLNA service which
++serves multimedia content to compatible clients on the network.
++See http://www.upnp.org/ for more details on UPnP
++and http://www.dlna.org/ for mode details on DLNA.
++
++Prerequisites
++==================
++
++- libexif
++- libjpeg
++- libid3tag
++- libFLAC
++- libvorbis
++- libsqlite3
++- libavformat (the ffmpeg libraries)
++
++
++Justin Maggard
++```
++
++In this tree the licence files are `COPYING` (GPL v2) and
++`LICENCE.miniupnpd` (BSD).
++
++## Two modes
++
++**Live folder mode** (default, `db_dir` empty)
++- Nothing is scanned at start-up. When a client opens a folder, minidlna
++  reads that one folder and `stat()`s only the page of entries the client
++  asked for. A folder with 20,000 entries answers in milliseconds once it
++  is in the page cache, and Linux OS does all the file caching.
++- Clients see your folder tree. Files are typed by extension (no media
++  probing), with size and date; `.srt`/`.smi` subtitles and `cover.jpg`
++  style art next to the files are served.
++- Not available: search, Artist/Album/Genre views, thumbnails, durations,
++  DLNA profile names, resume bookmarks and TiVo. Some TVs show no duration
++  or cannot seek without them, and Xbox 360/Windows Media Player rely on
++  search.
++
++**Database mode** (`db_dir=/var/cache/minidlna`)
++- The original behaviour: all media is scanned into SQLite on start-up and
++  kept up to date with inotify, giving the full feature set.
++
++## Build
++
++Install the build dependencies (Ubuntu/Debian):
++
++```sh
++sudo apt install build-essential autoconf automake autopoint gettext pkg-config \
++    debhelper dh-autoreconf libavcodec-dev libavformat-dev libavutil-dev \
++    libexif-dev libflac-dev libid3tag0-dev libjpeg-dev libogg-dev \
++    libsqlite3-dev libvorbis-dev libffmpegthumbnailer-dev
++# or, from inside this directory:  sudo apt build-dep ./
++```
++
++### Plain binary (for development)
++
++```sh
++./autogen.sh
++./configure --enable-thumbnail
++make
++./minidlnad -h
++```
++
++### Debian package
++
++Build in a copy so the build artifacts stay out of the source tree:
++
++```sh
++mkdir -p ~/build
++rsync -a --exclude CLAUDE.md ./ ~/build/minidlna-2.0.0/
++cd ~/build/minidlna-2.0.0
++dpkg-buildpackage -us -uc -b
++ls ../minidlna_*.deb
++```
++
++The package version comes from the top entry of `debian/changelog`
++(currently `2.0.0-1`, which apt treats as newer than Ubuntu's 1.3.3). For a
++new release add an entry there, e.g. `dch -v 2.0.1-1 "..."` (package
++`devscripts`), and change `AC_INIT` in `configure.ac` and `MINIDLNA_VERSION`
++in `upnpglobalvars.h` to match. Only binary packages (`-b`) can be built:
++a source package would need a `minidlna_2.0.0.orig.tar.*` tarball.
++
++The source tree has the quilt patches in `debian/patches/` already applied.
++To change upstream files, record the change in a patch:
++
++```sh
++export QUILT_PATCHES=debian/patches
++quilt new 20-my-change.patch && quilt add file.c   # before editing
++# ... edit ...
++quilt refresh -p ab --no-timestamps --no-index
++```
++
++## Install
++
++```sh
++cd ~/build
++sudo apt install ./minidlna_2.0.0-1_amd64.deb
++sudo apt-mark hold minidlna        # keep apt upgrade from replacing it
++```
++
++If you edited `/etc/minidlna.conf` before, dpkg asks whether to keep it;
++keeping it is safe, and the shipped version is saved next to it as
++`/etc/minidlna.conf.dpkg-dist`. To upgrade later, use the same command
++with `--allow-change-held-packages`.
++
++## Run as a systemd service
++
++The service starts at boot, runs as root and reads `/etc/minidlna.conf`
++(it always passes `-f /etc/minidlna.conf`).
++
++1. Set what to share in `/etc/minidlna.conf`:
++   ```ini
++   media_dir=/home/me/Videos           # repeat for more folders
++   media_dir=A,/home/me/Music          # A, V or P limits the media type
++   friendly_name=Living Room Server    # name shown on clients
++   #user=me                            # optional: drop root after start-up
++   ```
++2. Start it and check it:
++   ```sh
++   sudo systemctl enable --now minidlna
++   sudo systemctl restart minidlna     # after every config change
++   systemctl status minidlna
++   journalctl -u minidlna -f           # log
++   ```
++   `http://<this-pc>:8200/status` shows the mode and connected clients.
++
++Extra command line options for the service go in `DAEMON_OPTS` in
++`/etc/default/minidlna`, for example `DAEMON_OPTS="-r --port=8300"`.
++
++## Run from the command line
++
++Any user can run `minidlnad` directly. Without `-f` it reads no config file
++(not even `/etc/minidlna.conf`): built-in defaults and `--option=value`
++arguments apply, and it serves the current directory as you:
++
++```sh
++cd ~/Videos
++minidlnad                          # runs in the background
++minidlnad -d                       # foreground, log on the terminal; Ctrl-C stops it
++```
++
++Any config file option can be given as `--option=value` or
++`--option value` (`-` and `_` are interchangeable) and overrides the file:
++
++```sh
++minidlnad --port=8201 --friendly-name="Bob's films" --media-dir=V,/srv/films
++minidlnad --media_dir ~/Music --media_dir ~/Pictures   # several folders
++minidlnad --wide_links=no          # hide symlinks that leave the media folders
++minidlnad --db_dir="$HOME/.cache/minidlna"   # database mode, full features
++minidlnad -f ~/my-minidlna.conf    # read a config file (its media_dir and user apply)
++minidlnad -h                       # all options
++```
++
++A background instance logs to `~/.local/state/minidlna/minidlna.log` and
++keeps its pid in `$XDG_RUNTIME_DIR/minidlna/minidlna.pid`. Stop it with:
++
++```sh
++kill "$(cat "$XDG_RUNTIME_DIR/minidlna/minidlna.pid")"
++```
++
++### Several servers on one computer
++
++Each instance needs its own HTTP port, UUID and name. The discovery port
++(UDP 1900) is shared automatically, and clients find every instance:
++
++```sh
++minidlnad --port=8201 --uuid="$(uuidgen)" --friendly-name="Alice's media"
++```
++
++A second instance under the same user also needs its own pid file:
++`-P "$XDG_RUNTIME_DIR/minidlna-2.pid"`.
++
++## Configuration defaults
++
++| Option | Default | Notes |
++|---|---|---|
++| `media_dir` | current directory (command line); `/var/lib/minidlna` (service) | `A,`/`V,`/`P,` prefix limits the media type |
++| `db_dir` | empty | empty = live folder mode |
++| `user` | empty | empty = keep the user that started minidlnad |
++| `root_container` | `B` | folder tree; only matters in database mode |
++| `wide_links` | `yes` | follow symlinks that point outside `media_dir` |
++| `inotify` | `yes` | database mode only |
++| `port` | `8200` | |
++| `network_interface` | all | interface names, comma separated |
++
++See `man minidlna.conf` and `man minidlnad` for every option.
++
++## Troubleshooting
++
++- **Clients don't see the server.** The phone and this computer must be on
++  the same network, and the firewall must allow UDP 1900 and the HTTP port:
++  `sudo ufw allow from 192.168.0.0/16 to any port 1900 proto udp` and
++  `sudo ufw allow from 192.168.0.0/16 to any port 8200 proto tcp`.
++  Wi-Fi "AP isolation" or guest networks block discovery.
++- **A folder is empty on the client.** The user minidlna runs as must be
++  able to read the folder and every parent directory. Only audio, video
++  and JPEG files with known extensions are listed.
++- **Two servers show up as one.** Give each instance its own `--uuid`.

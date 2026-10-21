@@ -1,0 +1,307 @@
+Description: Take the first free HTTP port from 8200 when none is set
+ Clients find a DLNA server through SSDP discovery, which carries the HTTP
+ port in its LOCATION URL, so the port need not be fixed. Without a port
+ setting (port=, -p, --port), minidlnad now tries 8200, 8201, ... (up to 100
+ ports) and uses the first free one. A port that is set is used exactly and
+ minidlnad exits if it is busy.
+ .
+ The HTTP socket is now opened in init(), after daemonizing, so that without
+ -P the pid file can be named after the port (minidlna-<port>.pid) and one
+ user can run several instances. Instances on a port other than 8200 get a
+ UUID that includes the port and, unless friendly_name is set, a name ending
+ in "[<port>]", so clients don't merge them with the instance on 8200.
+Forwarded: no
+Last-Update: 2026-10-21
+--- a/minidlna.c
++++ b/minidlna.c
+@@ -107,6 +107,13 @@
+ 
+ static LIST_HEAD(httplisthead, upnphttp) upnphttphead;
+ 
++#define DEFAULT_HTTP_PORT 8200
++/* How many ports past the default to try when it is in use */
++#define HTTP_PORT_TRIES 100
++
++/* Opened in init(), after daemonizing, so the port is known early */
++static int http_socket = -1;
++
+ /* OpenAndConfHTTPSocket() :
+  * setup the socket used to handle incoming HTTP connections. */
+ static int
+@@ -136,8 +143,12 @@ OpenAndConfHTTPSocket(unsigned short por
+ 
+ 	if (bind(s, (struct sockaddr *)&listenname, sizeof(struct sockaddr_in)) < 0)
+ 	{
+-		DPRINTF(E_ERROR, L_GENERAL, "bind(http): %s\n", strerror(errno));
++		/* A busy port is the caller's to report; keep errno for it */
++		int err = errno;
++		if (err != EADDRINUSE)
++			DPRINTF(E_ERROR, L_GENERAL, "bind(http): %s\n", strerror(err));
+ 		close(s);
++		errno = err;
+ 		return -1;
+ 	}
+ 
+@@ -566,6 +577,8 @@ init(int argc, char **argv)
+ 	int debug_flag = 0;
+ 	int default_log = 0;
+ 	int bad_option = 0;
++	int port_set = 0, uuid_set = 0, name_set = 0;
++	int port_pidfile_name;
+ 	const char *default_pidfile = pidfilename;
+ 	int verbose_flag = 0;
+ 	int options_flag = 0;
+@@ -606,7 +619,7 @@ init(int argc, char **argv)
+ 
+ 	getfriendlyname(friendly_name, FRIENDLYNAME_MAX_LEN);
+ 	
+-	runtime_vars.port = 8200;
++	runtime_vars.port = DEFAULT_HTTP_PORT;
+ 	runtime_vars.notify_interval = 895;	/* seconds between SSDP announces */
+ 	runtime_vars.max_connections = 50;
+ 	runtime_vars.root_container = BROWSEDIR_ID;	/* root_container=B */
+@@ -700,6 +713,7 @@ init(int argc, char **argv)
+ 			break;
+ 		case UPNPPORT:
+ 			runtime_vars.port = atoi(ary_options[i].value);
++			port_set = 1;
+ 			break;
+ 		case UPNPPRESENTATIONURL:
+ 			presurl = ary_options[i].value;
+@@ -718,6 +732,7 @@ init(int argc, char **argv)
+ 			break;
+ 		case UPNPFRIENDLYNAME:
+ 			strncpyt(friendly_name, ary_options[i].value, FRIENDLYNAME_MAX_LEN);
++			name_set = 1;
+ 			break;
+ 		case UPNPMEDIADIR:
+ 			types = ALL_MEDIA;
+@@ -864,6 +879,7 @@ init(int argc, char **argv)
+ 			break;
+ 		case UPNPUUID:
+ 			strcpy(uuidvalue+5, ary_options[i].value);
++			uuid_set = 1;
+ 			break;
+ 		case USER_ACCOUNT:
+ 			/* An empty user keeps running as the user that started us */
+@@ -998,7 +1014,10 @@ init(int argc, char **argv)
+ 			break;
+ 		case 'p':
+ 			if (i+1 < argc)
++			{
+ 				runtime_vars.port = atoi(argv[++i]);
++				port_set = 1;
++			}
+ 			else
+ 				DPRINTF(E_FATAL, L_GENERAL, "Option -%c takes one argument.\n", argv[i][1]);
+ 			break;
+@@ -1136,7 +1155,9 @@ init(int argc, char **argv)
+ 			argv[0]);
+ 		printoptionnames(stdout);
+ 		printf("\n"
+-			"\tDefault pid file is %s.\n"
++			"\tWithout a port setting, the first free port from 8200 is used.\n"
++			"\tWithout -P, the pid file is minidlna-<port>.pid in /run/minidlna\n"
++			"\t(in $XDG_RUNTIME_DIR/minidlna for ordinary users).\n"
+ 			"\tWith -d minidlna will run in debug mode (not daemonize).\n"
+ 			"\t-w sets the presentation url. Default is http address on port 80\n"
+ 			"\t-v enables verbose output\n"
+@@ -1147,8 +1168,7 @@ init(int argc, char **argv)
+ #if defined(__linux__) || defined(__APPLE__)
+ 			"\t-S changes behaviour for systemd/launchd\n"
+ #endif
+-			"\t-V print the version number\n",
+-			pidfilename);
++			"\t-V print the version number\n");
+ 		return 1;
+ 	}
+ 
+@@ -1160,6 +1180,10 @@ init(int argc, char **argv)
+ 	else if (!log_level)
+ 		log_level = log_str;
+ 
++	/* Without -P the pid file is named after the HTTP port, so several
++	 * instances can run side by side */
++	port_pidfile_name = (pidfilename == default_pidfile);
++
+ 	/* An ordinary user can't write the system log and pid locations, so
+ 	 * unless they were given explicitly, use per-user ones instead. */
+ 	if (geteuid() != 0)
+@@ -1222,9 +1246,52 @@ init(int argc, char **argv)
+ 		}
+ 	}
+ 
+-	if (process_check_if_running(pidfilename) < 0)
++	if (!port_pidfile_name && process_check_if_running(pidfilename) < 0)
+ 		DPRINTF(E_FATAL, L_GENERAL, SERVER_NAME " is already running. EXITING.\n");
+ 
++	/* Claim the HTTP port. Unless a port was set, step past ports in use:
++	 * SSDP tells clients which port each server is on. */
++	for (i = runtime_vars.port; ; i++)
++	{
++		http_socket = OpenAndConfHTTPSocket(i);
++		if (http_socket >= 0)
++			break;
++		if (port_set || errno != EADDRINUSE ||
++		    i + 1 >= runtime_vars.port + HTTP_PORT_TRIES || i >= 65535)
++			DPRINTF(E_FATAL, L_GENERAL, "Failed to open socket for HTTP on port %d: %s. EXITING\n",
++				i, strerror(errno));
++	}
++	if (i != runtime_vars.port)
++		DPRINTF(E_WARN, L_GENERAL, "HTTP port %d is in use, using %d\n", runtime_vars.port, i);
++	runtime_vars.port = i;
++
++	if (port_pidfile_name)
++	{
++		static char port_pidfile[PATH_MAX + 32];
++		char dir[PATH_MAX];
++
++		strncpyt(dir, pidfilename, sizeof(dir));
++		snprintf(port_pidfile, sizeof(port_pidfile), "%s/minidlna-%d.pid",
++		         dirname(dir), runtime_vars.port);
++		pidfilename = port_pidfile;
++		if (process_check_if_running(pidfilename) < 0)
++			DPRINTF(E_FATAL, L_GENERAL, SERVER_NAME " is already running. EXITING.\n");
++	}
++
++	/* Another instance on this machine has the MAC-based UUID and the
++	 * default name: on other ports, look like a separate server */
++	if (runtime_vars.port != DEFAULT_HTTP_PORT)
++	{
++		if (!uuid_set)
++			snprintf(uuidvalue+5, UUIDVALUE_MAX_LEN-5, "4d696e69-444c-%04x-9d41-%s",
++			         runtime_vars.port, mac_str);
++		if (!name_set)
++		{
++			size_t len = strlen(friendly_name);
++			snprintf(friendly_name+len, FRIENDLYNAME_MAX_LEN-len, " [%d]", runtime_vars.port);
++		}
++	}
++
+ 	set_startup_time();
+ 
+ 	/* presentation url */
+@@ -1380,10 +1447,8 @@ main(int argc, char **argv)
+ 		event_module.add(&ssdpev);
+ 	}
+ 
+-	/* open socket for HTTP connections. */
+-	shttpl = OpenAndConfHTTPSocket(runtime_vars.port);
+-	if (shttpl < 0)
+-		DPRINTF(E_FATAL, L_GENERAL, "Failed to open socket for HTTP. EXITING\n");
++	/* socket for HTTP connections, opened in init() */
++	shttpl = http_socket;
+ 	DPRINTF(E_WARN, L_GENERAL, "HTTP listening on port %d\n", runtime_vars.port);
+ 	httpev = (struct event ){ .fd = shttpl, .rdwr = EVENT_READ, .process = ProcessListen };
+ 	event_module.add(&httpev);
+--- a/minidlna.conf
++++ b/minidlna.conf
+@@ -1,4 +1,5 @@
+ # port for HTTP (descriptions, SOAP, media transfer) traffic
++# a port set here is used exactly; without it, the first free port from 8200 up is used
+ port=8200
+ 
+ # network interfaces to serve, comma delimited (8 interfaces max)
+--- a/minidlna.conf.5
++++ b/minidlna.conf.5
+@@ -28,8 +28,10 @@ The name you want your media server seen
+ 
+ .IP "\fBport\fP"
+ .nf
+-Port for HTTP (descriptions, SOAP, media transfer) traffic etc, defaults to 8200.
+-There should be no need to change this.
++Port for HTTP (descriptions, SOAP, media transfer) traffic etc. A port set here
++or on the command line is used exactly; without one, the first free port from
++8200 upwards is used. Instances not on 8200 get a UUID and default name that
++include the port, so clients see them as separate servers.
+ .fi
+ 
+ .IP "\fBnetwork_interface\fP"
+--- a/minidlnad.8
++++ b/minidlnad.8
+@@ -43,7 +43,8 @@ Read this configuration file. Without \f
+ minidlna service passes \fB\-f /etc/minidlna.conf\fR.
+ 
+ .IP "\fB\-p\fR \fIport\fR"
+-Allows to run minidlna on a different port.
++Run minidlna on this port exactly. Without a port, the first free port from
++8200 upwards is used, and the default pid file is named minidlna-<port>.pid.
+ 
+ .IP "\fB\-w\fR \fIpresentation_url\fR"
+ Change the default presentation url address.
+--- a/README.md
++++ b/README.md
+@@ -11,7 +11,8 @@ patches that let it run without a media
+ |---|---|
+ | `16-live-folder-mode-without-database.patch` | With `db_dir` empty, no database, scanner or inotify watcher. Each folder is read from disk when a client opens it. |
+ | `17-defaults-run-as-invoking-user.patch` | `root_container=B` by default; empty `user=`/`db_dir=` accepted; per-user log and pid files for unprivileged runs. The package no longer creates a `minidlna` system user. |
+-| `18-cmdline-options-and-cwd-media-dir.patch` | Every config option can be given as `--option=value`; without `-f` the current directory is served; `wide_links=yes` by default. |
++| `18-cmdline-options-and-cwd-media-dir.patch` | Every config option can be given as `--option=value`; without `-f` no config file is read and the current directory is served; `wide_links=yes` by default. |
++| `21-auto-http-port.patch` | Without a port setting, the first free port from 8200 is used; per-port pid file, UUID and default name, so several instances can run side by side. |
+ 
+ ## Original README
+ 
+@@ -184,24 +185,32 @@ minidlnad -f ~/my-minidlna.conf    # rea
+ minidlnad -h                       # all options
+ ```
+ 
+-A background instance logs to `~/.local/state/minidlna/minidlna.log` and
+-keeps its pid in `$XDG_RUNTIME_DIR/minidlna/minidlna.pid`. Stop it with:
++Without a port setting, minidlnad takes the first free port from 8200
++upwards (8200 is usually the system service, so a shell run gets 8201, the
++next one 8202, ...). A background instance logs to
++`~/.local/state/minidlna/minidlna.log` and keeps its pid in
++`$XDG_RUNTIME_DIR/minidlna/minidlna-<port>.pid`. Stop one, or all of yours:
+ 
+ ```sh
+-kill "$(cat "$XDG_RUNTIME_DIR/minidlna/minidlna.pid")"
++kill "$(cat "$XDG_RUNTIME_DIR/minidlna/minidlna-8201.pid")"
++pkill -u "$USER" -x minidlnad
+ ```
+ 
+ ### Several servers on one computer
+ 
+-Each instance needs its own HTTP port, UUID and name. The discovery port
+-(UDP 1900) is shared automatically, and clients find every instance:
++Just start more: each one picks the next free port, and one that isn't on
++8200 also gets its own UUID and a name ending in `[<port>]`, so clients list
++them as separate servers. The discovery port (UDP 1900) is shared, and
++clients find every instance whatever its port:
+ 
+ ```sh
+-minidlnad --port=8201 --uuid="$(uuidgen)" --friendly-name="Alice's media"
++cd ~/Videos && minidlnad           # e.g. "laptop: me [8201]"
++cd ~/Music  && minidlnad           # e.g. "laptop: me [8202]"
++minidlnad --friendly-name="Alice's media" --media-dir=/srv/alice   # own name
+ ```
+ 
+-A second instance under the same user also needs its own pid file:
+-`-P "$XDG_RUNTIME_DIR/minidlna-2.pid"`.
++A port given with `--port`, `-p` or `port=` in a `-f` file is used exactly,
++and minidlnad exits if it is busy.
+ 
+ ## Configuration defaults
+ 
+@@ -213,7 +222,7 @@ A second instance under the same user al
+ | `root_container` | `B` | folder tree; only matters in database mode |
+ | `wide_links` | `yes` | follow symlinks that point outside `media_dir` |
+ | `inotify` | `yes` | database mode only |
+-| `port` | `8200` | |
++| `port` | first free from `8200` | a set port is used exactly; the service sets `8200` |
+ | `network_interface` | all | interface names, comma separated |
+ 
+ See `man minidlna.conf` and `man minidlnad` for every option.
+@@ -223,9 +232,11 @@ See `man minidlna.conf` and `man minidln
+ - **Clients don't see the server.** The phone and this computer must be on
+   the same network, and the firewall must allow UDP 1900 and the HTTP port:
+   `sudo ufw allow from 192.168.0.0/16 to any port 1900 proto udp` and
+-  `sudo ufw allow from 192.168.0.0/16 to any port 8200 proto tcp`.
++  `sudo ufw allow from 192.168.0.0/16 to any port 8200:8299 proto tcp`
++  (covers instances that stepped past 8200).
+   Wi-Fi "AP isolation" or guest networks block discovery.
+ - **A folder is empty on the client.** The user minidlna runs as must be
+   able to read the folder and every parent directory. Only audio, video
+   and JPEG files with known extensions are listed.
+-- **Two servers show up as one.** Give each instance its own `--uuid`.
++- **Two servers show up as one.** Instances with an explicit `--uuid` must
++  each use a different one.

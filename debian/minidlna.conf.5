@@ -51,9 +51,11 @@ This option can be specified more than once.
 .It Cm db_dir
 Path to the directory
 .Nm minidlnad
-should use to store its database and album art cache. Uses
-.Pa /var/lib/minidlna
-by default.
+should use to store its database and album art cache.
+If it is not set, no database is built: each folder is read from disk when a
+client browses it, and only file names, sizes and dates are reported.
+Search, the Artist/Album/Genre views, thumbnails, durations, bookmarks and
+TiVo support need a database.
 .It Cm enable_tivo
 Support for streaming .jpg and .mp3 files to a TiVo supporting HMO. Set to
 .Dq yes
@@ -76,7 +78,9 @@ to enable inotify monitoring of the files under
 .Cm media_dir
 to automatically discover new files. Set to
 .Dq no
-to disable inotify.
+to disable inotify. This is the default, and it has no effect when
+.Cm db_dir
+is empty.
 .It Cm network_interface
 Comma separated list of network interfaces to bind to. Default is empty which means bind to all.
 .It Cm log_dir
@@ -199,10 +203,16 @@ binds to all the valid network interfaces
 Set the notify interval, in seconds. The default is 895 seconds.
 .It Cm port
 Port number for HTTP traffic
-.Pq descriptions, SOAP, media transfe .
-This option is mandatory, unless the port number is specified on the
-command-line using
-.Fl p Pq see Xr minidlnad 1 .
+.Pq descriptions, SOAP, media transfer .
+A port set here or on the command line
+.Pq Fl p , Fl -port
+is used exactly, and
+.Nm minidlnad
+exits if it is in use. Without one, the first free port from 8200 upwards is
+used; clients find the server through SSDP discovery whatever its port.
+Instances not on 8200 also get a UUID and a default
+.Cm friendly_name
+that include the port, so clients see them as separate servers.
 .It Cm presentation_url
 Define the URL presented to clients
 .Pq e.g. Dq http://example.com:80 .
@@ -214,12 +224,12 @@ possible values
 .Bl -bullet -offset indent -compact
 .It
 .Ql \&.
-to use the standard container (this is the default);
+to use the standard container;
 .It
 .Ql B
 to use the
 .Dq Browse Directory
-container;
+container (this is the default);
 .It
 .Ql M
 to use the
@@ -241,6 +251,9 @@ If you specify
 and the client device is audio only, then
 .Dq Music/Folders
 will be used as the root container.
+Ignored when
+.Cm db_dir
+is empty: the root is then always the folder tree.
 .It Cm serial
 Set the serial number reported to clients. Defaults to MAC address od network interface.
 .It Cm strict_dlna
@@ -258,23 +271,30 @@ is used. You can switch to legacy
 .Dq beacon
 method.
 .It Cm user
-Specify the user name or UID to run as. Beware that if you are using an init system to start
-.Nm minidlnad ,
-then this option has no effect and you should override default user in
+Specify the user name or UID to switch to after starting. Empty (the
+default) keeps running as the user that started
+.Nm minidlnad :
+the invoking user when run directly, or root when started by
 .Pa minidlna.service
-for systemd or set
-.Ev USER
-in
-.Pa /etc/default/minidlna
-for sysV init.
+or
+.Pa /etc/init.d/minidlna .
+An ordinary user that cannot write the default log and pid locations gets
+per-user ones under
+.Ev XDG_STATE_HOME
+(or
+.Pa ~/.local/state )
+and
+.Ev XDG_RUNTIME_DIR .
 .It Cm uuid
 Specify device's UPnP UUID minidlna should use. By default MAC address is used to build uniq UUID.
 .It Cm wide_links
 Set to
-.Dq yes
-to allow symlinks that point outside user-defined
+.Dq no
+to hide symlinks that point outside user-defined
 .Cm media_dir.
-By default, wide symlinks are not followed.
+By default
+.Pq Dq yes ,
+wide symlinks are followed.
 .It Cm enable_subtitles
 Set to
 .Dq no

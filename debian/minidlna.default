@@ -16,9 +16,10 @@
 #LOGFILE="/var/log/minidlna/minidlna.log"
 
 # User and group the daemon should run as
-# only for sysV init, for systemd please override minidlna.service
-#USER="minidlna"
-#GROUP="minidlna"
+# only for sysV init; to drop privileges with either init system, set user= in
+# /etc/minidlna.conf instead
+#USER="root"
+#GROUP="root"
 
 # Additional options that are passed to the daemon
 # We pass -r option to do soft non-destructive rebuild on every start-up.

@@ -27,8 +27,8 @@ SCRIPTNAME=/etc/init.d/$NAME
 # Defaults (could be overridden in /etc/default/$NAME)
 CONFIGFILE=/etc/minidlna.conf
 LOGFILE=/var/log/$NAME/minidlna.log
-USER=minidlna
-GROUP=minidlna
+USER=root
+GROUP=root
 DAEMON_OPTS="-r"
 
 # Exit if the package is not installed

@@ -6,23 +6,32 @@ minidlna
 .PP
 .B minidlna
 is a light weight but very functional DLNA server. In most cases, the defaults 
-do not need modifications. The global configuration file is /etc/minidlna.conf 
-but local users without system root access can run minidlna with their own 
-configuration file.
+do not need modifications. A configuration file is only read when given with
+\-f; the minidlna service uses /etc/minidlna.conf. Local users without system
+root access can run minidlna with their own configuration file, or with no
+file and \-\-option=value command line options instead.
 
 .SH OPTIONS
 .PP
 The following are user configurable options in /etc/minidlna.conf.
-minidlna runs by default as user nobody, so make sure system permissions are 
-set correctly for read access to media and write access to cache and log dirs.
+minidlna runs as the user that starts it unless \fBuser\fP is set, so make sure
+that user can read the media. An ordinary user that cannot write the default
+log and pid locations gets per-user ones under $XDG_STATE_HOME (or
+~/.local/state) and $XDG_RUNTIME_DIR.
+
+.IP "\fBuser\fP"
+User name or uid to switch to after starting. Empty (the default) keeps
+running as the user that started minidlna.
 
 .IP "\fBfriendly_name\fP"
 The name you want your media server seen as, EG: friendly_name=Home Media Server
 
 .IP "\fBport\fP"
 .nf
-Port for HTTP (descriptions, SOAP, media transfer) traffic etc, defaults to 8200.
-There should be no need to change this.
+Port for HTTP (descriptions, SOAP, media transfer) traffic etc. A port set here
+or on the command line is used exactly; without one, the first free port from
+8200 upwards is used. Instances not on 8200 get a UUID and default name that
+include the port, so clients see them as separate servers.
 .fi
 
 .IP "\fBnetwork_interface\fP"
@@ -106,8 +115,11 @@ EG: presentation_url=http://www.mediaserver.lan/index.php
 .fi
 
 .IP "\fBdb_dir\fP"
-Where minidlna stores the data files, including Album cache files, by default 
-this is /var/cache/minidlna
+Where minidlna stores the data files, including Album cache files. If it is
+not set, no database is built: each folder is read from disk when a client
+browses it, and only file names, sizes and dates are reported. Search, the
+Artist/Album/Genre views, thumbnails, durations, bookmarks and TiVo support
+need a database.
 
 .IP "\fBlog_dir\fP"
 Path to the directory where the log file upnp-av.log should be stored, this 
@@ -125,6 +137,7 @@ log_level=general,artwork,database,inotify,scanner,metadata,http,ssdp,tivo=warn
 .IP "\fBinotify\fP"
 Set to 'yes' to enable inotify monitoring of the files under media_dir 
 to automatically discover new files. Set to 'no' to disable inotify.
+This is the default, and it has no effect when \fBdb_dir\fP is empty.
 
 .IP "\fBalbum_art_names\fP"
 This should be a list of file names to check for when searching for album art
@@ -149,13 +162,14 @@ using Bonjour if Avahi support is available.
 Use a different container as the root of the tree exposed to clients.
 .nf
 The possible values are:
-             '.' to use the standard container (this is the default)
-             'B' to use the "Browse Directory" container;
+             '.' to use the standard container;
+             'B' to use the "Browse Directory" container (this is the default);
              'M' to use the "Music" container;
              'V' to use the "Video" container;
              'P' to use the "Pictures" container.
   If you specify 'B' and the client device is audio only, then
   "Music/Folders" will be used as root container and you wont see Videos.
+  Ignored when db_dir is empty: the root is then always the folder tree.
 .fi
 
 .IP "\fBforce_sort_criteria\fP"
@@ -172,8 +186,8 @@ force_sort_criteria=+upnp:class,+upnp:originalTrackNumber,+dc:title
 .fi
 
 .IP "\fBwide_links\fP"
-Set to 'yes' to allow symlinks that point outside user-defined media_dirs.
-By default, wide symlinks are not followed.
+Set to 'no' to hide symlinks that point outside user-defined media_dirs.
+By default ('yes'), wide symlinks are followed.
 
 .IP "\fBenable_subtitles\fP"
 Set to 'no' to disable subtitle support on unknown clients.

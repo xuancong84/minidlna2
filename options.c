@@ -80,7 +80,7 @@ int
 readoptionsfile(const char * fname)
 {
 	FILE *hfile = NULL;
-	char buffer[1024];
+	char buffer[MAX_OPTION_VALUE_LEN + 64];
 	char *equals;
 	char *name;
 	char *value;
@@ -186,6 +186,114 @@ readoptionsfile(const char * fname)
 	fclose(hfile);
 	
 	return 0;
+}
+
+static enum upnpconfigoptions
+lookup_option(const char *name)
+{
+	char key[64];
+	size_t i;
+
+	if (strlen(name) >= sizeof(key))
+		return UPNP_INVALID;
+	for (i = 0; name[i]; i++)
+		key[i] = (name[i] == '-') ? '_' : name[i];
+	key[i] = '\0';
+
+	for (i = 0; i < sizeof(optionids)/sizeof(optionids[0]); i++)
+	{
+		if (strcmp(key, optionids[i].name) == 0)
+			return optionids[i].id;
+	}
+
+	return UPNP_INVALID;
+}
+
+static int
+is_list_option(enum upnpconfigoptions id)
+{
+	return id == UPNPMEDIADIR || id == UPNPALBUMART_NAMES || id == UPNPIFNAME;
+}
+
+/* Drop the values of one option stored at indices [start, end) */
+static int
+remove_range(enum upnpconfigoptions id, int start, int end)
+{
+	int i, n = start;
+
+	for (i = start; i < num_options; i++)
+	{
+		if (i < end && ary_options[i].id == id)
+			continue;
+		ary_options[n++] = ary_options[i];
+	}
+	i = num_options - n;
+	num_options = n;
+
+	return i;
+}
+
+void
+removeoptions(enum upnpconfigoptions id)
+{
+	remove_range(id, 0, num_options);
+}
+
+int
+addoption(const char * name, const char * value)
+{
+	static int first_cmdline = -1;
+	enum upnpconfigoptions id = lookup_option(name);
+	struct option *t;
+	int i;
+
+	if (id == UPNP_INVALID)
+		return -1;
+	if (first_cmdline < 0)
+		first_cmdline = num_options;
+
+	/* The first command line value of a list replaces the config file's */
+	if (is_list_option(id))
+	{
+		for (i = first_cmdline; i < num_options; i++)
+		{
+			if (ary_options[i].id == id)
+				break;
+		}
+		if (i == num_options)
+			first_cmdline -= remove_range(id, 0, first_cmdline);
+	}
+
+	t = realloc(ary_options, (num_options + 1) * sizeof(struct option));
+	if (!t)
+		return -1;
+	ary_options = t;
+	ary_options[num_options].id = id;
+	strncpyt(ary_options[num_options].value, value, MAX_OPTION_VALUE_LEN);
+	num_options++;
+
+	return 0;
+}
+
+void
+printoptionnames(FILE * f)
+{
+	size_t i;
+	int col = 8;
+
+	fprintf(f, "\t");
+	for (i = 0; i < sizeof(optionids)/sizeof(optionids[0]); i++)
+	{
+		int len = strlen(optionids[i].name) + 2;
+		if (col + len > 78)
+		{
+			fprintf(f, "\n\t");
+			col = 8;
+		}
+		fprintf(f, "%s%s", optionids[i].name,
+		        (i + 1 < sizeof(optionids)/sizeof(optionids[0])) ? ", " : "\n");
+		col += len;
+	}
 }
 
 void
