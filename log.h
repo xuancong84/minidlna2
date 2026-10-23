@@ -1,7 +1,7 @@
-/* MiniDLNA media server
+/* microDLNA media server
  * Copyright (C) 2008-2010 NETGEAR, Inc. All Rights Reserved.
  *
- * This file is part of MiniDLNA.
+ * This file is part of microDLNA.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by

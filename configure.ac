@@ -1,20 +1,20 @@
-# This file is part of MiniDLNA.
+# This file is part of microDLNA.
 #
-# MiniDLNA is free software; you can redistribute it and/or modify it
+# microDLNA is free software; you can redistribute it and/or modify it
 # under the terms of the GNU Lesser General Public License as
 # published by the Free Software Foundation; either version 2 of the
 # License, or (at your option) any later version.
 #
-# MiniDLNA is distributed in the hope that it will be useful, but WITHOUT
+# microDLNA is distributed in the hope that it will be useful, but WITHOUT
 # ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
 # or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public
 # License for more details.
 #
 # You should have received a copy of the GNU Lesser General Public
-# License along with MiniDLNA; if not, write to the Free Software
+# License along with microDLNA; if not, write to the Free Software
 # Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307
 # USA.
-AC_INIT([MiniDLNA],[2.2.0],[],[minidlna],[http://sourceforge.net/projects/minidlna/])
+AC_INIT([microDLNA],[1.0.0],[],[microdlna],[https://github.com/xuancong84/minidlna2])
 #LT_INIT
 
 AC_CANONICAL_TARGET
@@ -24,7 +24,7 @@ AM_SILENT_RULES([yes])
 
 m4_ifdef([AC_USE_SYSTEM_EXTENSIONS], [AC_USE_SYSTEM_EXTENSIONS])
 
-#MiniDLNA
+#microDLNA
 
 AM_ICONV
 AM_GNU_GETTEXT([external])
@@ -42,8 +42,8 @@ AC_PROG_MAKE_SET
 AC_DEFINE_UNQUOTED([OS_URL],"http://sourceforge.net/projects/minidlna/",[OS URL])
 AC_DEFINE_UNQUOTED([ROOTDEV_MANUFACTURER],"Justin Maggard", [Manufacturer])
 AC_DEFINE_UNQUOTED([ROOTDEV_MANUFACTURERURL],"http://www.netgear.com/", [Manufacturer URL])
-AC_DEFINE_UNQUOTED([ROOTDEV_MODELNAME],"Windows Media Connect compatible (MiniDLNA)", [Model name])
-AC_DEFINE_UNQUOTED([ROOTDEV_MODELDESCRIPTION],"MiniDLNA on " OS_NAME, [Model description])
+AC_DEFINE_UNQUOTED([ROOTDEV_MODELNAME],"Windows Media Connect compatible (microDLNA)", [Model name])
+AC_DEFINE_UNQUOTED([ROOTDEV_MODELDESCRIPTION],"microDLNA on " OS_NAME, [Model description])
 AC_DEFINE_UNQUOTED([ROOTDEV_MODELURL],OS_URL,[Model URL])
 
 
@@ -536,7 +536,7 @@ AC_DEFINE_UNQUOTED([DEFAULT_LOG_PATH],"${with_logpath}",[Log path])
 
 AC_ARG_WITH(db-path,
 	AS_HELP_STRING([--with-db-path=PATH],[Default DB path]),
-	[with_dbpath="$withval"],[with_dbpath="/var/cache/minidlna"])
+	[with_dbpath="$withval"],[with_dbpath="/var/cache/microdlna"])
 AC_DEFINE_UNQUOTED([DEFAULT_DB_PATH],"${with_dbpath}",[DB path])
 
 AC_ARG_WITH(os-name,

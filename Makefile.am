@@ -1,17 +1,17 @@
-# This file is part of MiniDLNA.
+# This file is part of microDLNA.
 #
-# MiniDLNA is free software; you can redistribute it and/or modify it
+# microDLNA is free software; you can redistribute it and/or modify it
 # under the terms of the GNU Lesser General Public License as
 # published by the Free Software Foundation; either version 2 of the
 # License, or (at your option) any later version.
 #
-# MiniDLNA is distributed in the hope that it will be useful, but WITHOUT
+# microDLNA is distributed in the hope that it will be useful, but WITHOUT
 # ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
 # or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public
 # License for more details.
 #
 # You should have received a copy of the GNU Lesser General Public
-# License along with MiniDLNA; if not, write to the Free Software
+# License along with microDLNA; if not, write to the Free Software
 # Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307
 # USA.
 
@@ -20,9 +20,9 @@ AM_CPPFLAGS = -DPKGDATADIR=\"$(pkgdatadir)\"
 
 SUBDIRS=po
 
-sbin_PROGRAMS = minidlnad
+sbin_PROGRAMS = microdlnad
 check_PROGRAMS = testupnpdescgen
-minidlnad_SOURCES = minidlna.c upnphttp.c upnpdescgen.c upnpsoap.c \
+microdlnad_SOURCES = microdlna.c upnphttp.c upnpdescgen.c upnpsoap.c \
 			upnpreplyparse.c minixml.c clients.c \
 			getifaddr.c process.c upnpglobalvars.c \
 			options.c minissdp.c uuid.c upnpevents.c \
@@ -33,13 +33,13 @@ minidlnad_SOURCES = minidlna.c upnphttp.c upnpdescgen.c upnpsoap.c \
 			unidecode_table.c tagutils/tagutils.c
 
 if HAVE_KQUEUE
-minidlnad_SOURCES += kqueue.c monitor_kqueue.c
+microdlnad_SOURCES += kqueue.c monitor_kqueue.c
 else
-minidlnad_SOURCES += select.c
+microdlnad_SOURCES += select.c
 endif
 
 if HAVE_INOTIFY
-minidlnad_SOURCES += monitor_inotify.c
+microdlnad_SOURCES += monitor_inotify.c
 endif
 
 if HAVE_VORBISFILE
@@ -56,7 +56,7 @@ avahilibs = -lavahi-client -lavahi-common
 endif
 endif
 
-minidlnad_LDADD = \
+microdlnad_LDADD = \
 	@LIBJPEG_LIBS@ \
 	@LIBID3TAG_LIBS@ \
 	@LIBSQLITE3_LIBS@ \
@@ -82,10 +82,10 @@ SUFFIXES = .tmpl .
 	sed -e s@:SBINDIR:@${sbindir}@ <$< >$@
 
 GENERATED_FILES = \
-	linux/minidlna.init.d.script
+	linux/microdlna.init.d.script
 
 TEMPLATES = \
-	linux/minidlna.init.d.script.tmpl
+	linux/microdlna.init.d.script.tmpl
 
 CLEANFILES = $(GENERATED_FILES) pinyin-dict.txt.gz
 

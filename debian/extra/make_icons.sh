@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Generate a free icons.c for minidlna from Debian's SVG logo
+# Generate a free icons.c for microdlna from Debian's SVG logo
 #
 # Copyright (C) 2011 Benoît Knecht <benoit.knecht@fsfe.org>
 #

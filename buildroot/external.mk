@@ -1,1 +1,1 @@
-include $(sort $(wildcard $(BR2_EXTERNAL_READYMEDIA_PATH)/*/*.mk))
+include $(sort $(wildcard $(BR2_EXTERNAL_MICRODLNA_PATH)/*/*.mk))

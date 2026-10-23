@@ -1,4 +1,4 @@
-/var/log/minidlna/*.log
+/var/log/microdlna/*.log
 {
 	rotate 4
 	weekly
@@ -8,6 +8,6 @@
 	compress
 	create 0644 root root
 	postrotate
-		service minidlna rotate > /dev/null
+		service microdlna rotate > /dev/null
 	endscript
 }

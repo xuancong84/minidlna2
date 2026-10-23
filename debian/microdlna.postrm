@@ -1,12 +1,12 @@
 #!/bin/sh
-# postrm script for minidlna
+# postrm script for microdlna
 
 set -e
 
 case "$1" in
     purge)
-        rm -rf /var/cache/minidlna /var/log/minidlna
-        rm -f /var/log/minidlna.log*
+        rm -rf /var/cache/microdlna /var/log/microdlna
+        rm -f /var/log/microdlna.log*
         ;;
 
     remove|upgrade|failed-upgrade|abort-install|abort-upgrade|disappear)

@@ -36,7 +36,7 @@
 char uuidvalue[] = "uuid:12345678-0000-0000-0000-00000000abcd";
 char friendly_name[] = "localhost: system_type";
 char serialnumber[] = "12345678";
-char modelname[] = "MiniDLNA";
+char modelname[] = "microDLNA";
 char modelnumber[] = "1";
 char presentationurl[] = "http://192.168.0.1:8080/";
 unsigned int updateID = 0;

@@ -1,3 +1,16 @@
+microdlna (1.0.0-1) noble; urgency=medium
+
+  * Rebrand as microDLNA, version 1.0.0, so the fork can't be confused with
+    MiniDLNA (patch 29): source and binary package microdlna, daemon
+    microdlnad, /etc/microdlna.conf, microdlna.service, /usr/share/microdlna,
+    /var/log/microdlna, /var/cache/microdlna, /run/microdlna, the
+    microdlna gettext domain and MICRODLNA_* identifiers. The UPnP server
+    string and default friendly name say microDLNA.
+  * Conflicts/Replaces: minidlna (both would announce the same UUID).
+  * Copyright notices of MiniDLNA's authors are kept.
+
+ -- xuancong <xuancong.wang@moht.com.sg>  Fri, 23 Oct 2026 09:31:52 +0800
+
 minidlna (2.2.0-1) noble; urgency=medium
 
   * Live folders sort folders first, then by a natural sort (ep2 before

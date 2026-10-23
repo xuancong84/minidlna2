@@ -34,7 +34,7 @@
 #include "event.h"
 #include "getifaddr.h"
 #include "upnpdescgen.h"
-#include "minidlnapath.h"
+#include "microdlnapath.h"
 #include "upnpglobalvars.h"
 
 #undef DESC_DEBUG

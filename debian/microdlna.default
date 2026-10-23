@@ -1,23 +1,23 @@
-# Defaults for minidlna initscript
-# sourced by minidlna.service and /etc/init.d/minidlna
+# Defaults for microdlna initscript
+# sourced by microdlna.service and /etc/init.d/microdlna
 #
 # WARNING: This file is used for compatibility with sysv init only.
-# If you are using systemd (Debian default), please override minidlna.service
+# If you are using systemd (Debian default), please override microdlna.service
 # unit instead of modifying these variables.
 
 
-# These options can be set to modify the behavior of the minidlna init script.
+# These options can be set to modify the behavior of the microdlna init script.
 # The options commented out show the default values.
 
 # Path to the configuration file
-#CONFIGFILE="/etc/minidlna.conf"
+#CONFIGFILE="/etc/microdlna.conf"
 
 # Path to the log file
-#LOGFILE="/var/log/minidlna/minidlna.log"
+#LOGFILE="/var/log/microdlna/microdlna.log"
 
 # User and group the daemon should run as
 # only for sysV init; to drop privileges with either init system, set user= in
-# /etc/minidlna.conf instead
+# /etc/microdlna.conf instead
 #USER="root"
 #GROUP="root"
 

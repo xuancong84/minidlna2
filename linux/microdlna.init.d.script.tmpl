@@ -1,0 +1,52 @@
+#!/bin/sh
+
+# chkconfig: 345 99 10
+# description: Startup/shutdown script for microDLNA daemon
+#
+# Based on the MiniUPnPd script by Thomas Bernard
+# Modified for microDLNA by Justin Maggard <jmaggard@users.sourceforge.net>
+# Status function added by Igor Drobot
+#
+### BEGIN INIT INFO
+# Provides:          microdlna
+# Required-Start:    $network $local_fs $remote_fs
+# Required-Stop::    $network $local_fs $remote_fs
+# Should-Start:      $all
+# Should-Stop:       $all
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: DLNA/UPnP-AV media server
+### END INIT INFO
+
+MICRODLNA=:SBINDIR:/microdlnad
+PIDFILE=/var/run/microdlna/microdlna.pid
+CONF=/etc/microdlna.conf
+ARGS="-f $CONF"
+
+test -f $MICRODLNA || exit 0
+
+. /lib/lsb/init-functions
+
+case "$1" in
+start)  log_daemon_msg "Starting microdlna" "microdlna"
+        start-stop-daemon --start --quiet --pidfile $PIDFILE --startas $MICRODLNA -- $ARGS $LSBNAMES
+        log_end_msg $?
+        ;;
+stop)   log_daemon_msg "Stopping microdlna" "microdlna"
+        start-stop-daemon --stop --quiet --pidfile $PIDFILE
+        log_end_msg $?
+        ;;
+restart|reload|force-reload)
+        log_daemon_msg "Restarting microdlna" "microdlna"
+        start-stop-daemon --stop --retry 5 --quiet --pidfile $PIDFILE
+        start-stop-daemon --start --quiet --pidfile $PIDFILE --startas $MICRODLNA -- $ARGS $LSBNAMES
+        log_end_msg $?
+        ;;
+status)
+        status_of_proc -p $PIDFILE $MICRODLNA microdlna && exit 0 || exit $?
+        ;;
+*)      log_action_msg "Usage: /etc/init.d/microdlna {start|stop|restart|reload|force-reload|status}"
+        exit 2
+        ;;
+esac
+exit 0

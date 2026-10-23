@@ -1,23 +1,23 @@
-/* MiniDLNA project
+/* microDLNA project, derived from MiniDLNA
  *
  * http://sourceforge.net/projects/minidlna/
  *
- * MiniDLNA media server
+ * microDLNA media server
  * Copyright (C) 2008-2017  Justin Maggard
  *
- * This file is part of MiniDLNA.
+ * This file is part of microDLNA.
  *
- * MiniDLNA is free software; you can redistribute it and/or modify
+ * microDLNA is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
  *
- * MiniDLNA is distributed in the hope that it will be useful,
+ * microDLNA is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with MiniDLNA. If not, see <http://www.gnu.org/licenses/>.
+ * along with microDLNA. If not, see <http://www.gnu.org/licenses/>.
  *
  * Portions of the code from the MiniUPnP project:
  *
@@ -51,18 +51,18 @@
 
 #include <time.h>
 
-#include "minidlnatypes.h"
+#include "microdlnatypes.h"
 #include "clients.h"
 #include "config.h"
 
 #include <sqlite3.h>
 
-#define MINIDLNA_VERSION "2.2.0"
+#define MICRODLNA_VERSION "1.0.0"
 
 #ifdef NETGEAR
 # define SERVER_NAME "ReadyDLNA"
 #else
-# define SERVER_NAME "MiniDLNA"
+# define SERVER_NAME "microDLNA"
 #endif
 
 #define USE_FORK 1
@@ -71,7 +71,7 @@
 #ifdef READYNAS
 # define LOGFILE_NAME "upnp-av.log"
 #else
-# define LOGFILE_NAME "minidlna.log"
+# define LOGFILE_NAME "microdlna.log"
 #endif
 
 #ifdef ENABLE_NLS

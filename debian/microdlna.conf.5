@@ -1,7 +1,7 @@
-.\" Man page for minidlna.conf
+.\" Man page for microdlna.conf
 .\"
 .\" This man page is based on the comments in the default configuration file
-.\" shipped with the minidlna source. Consequently, it is licensed under the
+.\" shipped with the microdlna source. Consequently, it is licensed under the
 .\" GPLv2.
 .\"
 .\" Copyright (C) 2009 Justin Maggard <jmaggard@users.sourceforge.net>
@@ -22,17 +22,17 @@
 .\" On Debian systems, the complete text of the GNU General
 .\" Public License version 2 can be found in "/usr/share/common-licenses/GPL-2".
 .Dd June 7, 2013
-.Dt MINIDLNA.CONF \&5 "File Formats Manual"
+.Dt MICRODLNA.CONF \&5 "File Formats Manual"
 .Os Debian
 .Sh NAME
-.Nm minidlna.conf
-.Nd MiniDLNA server configuration file
+.Nm microdlna.conf
+.Nd microDLNA server configuration file
 .Sh SYNOPSIS
-.Nm /etc/minidlna.conf
+.Nm /etc/microdlna.conf
 .Sh DESCRIPTION
-.Xr minidlnad 1
+.Xr microdlnad 1
 reads configuration options from the system-wide configuration file
-.Pa /etc/minidlna.conf ,
+.Pa /etc/microdlna.conf ,
 or the file specified with
 .Fl f
 on the command line. The file contains keyword-argument pairs, one per line.
@@ -50,7 +50,7 @@ forward slashes
 This option can be specified more than once.
 .It Cm db_dir
 Path to the directory
-.Nm minidlnad
+.Nm microdlnad
 should use to store its database and album art cache.
 If it is not set, no database is built: each folder is read from disk when a
 client browses it. Durations, resolutions, tags and thumbnails are learned
@@ -68,7 +68,7 @@ Set to
 (default) otherwise.
 .It Cm friendly_name
 Customize the name that the
-.Nm minidlnad
+.Nm microdlnad
 server sends to clients. Defaults to
 .Dq hostname:\ username .
 .It Cm force_sort_criteria
@@ -88,7 +88,7 @@ is empty.
 Comma separated list of network interfaces to bind to. Default is empty which means bind to all.
 .It Cm log_dir
 Path to the directory where the log file should be stored. Defaults to
-.Pa /var/log/minidlna .
+.Pa /var/log/microdlna .
 Not used when "systemd" mode is activated with -S switch.
 .It Cm log_level
 Defines the type of messages that should be logged, and down to which level of
@@ -137,7 +137,7 @@ level.
 Specify maximum number of simultaneous connections. Note: many clients open several simultaneous connections while streaming.
 .It Cm media_dir
 Path to the directory containing the media files the
-.Nm minidlnad
+.Nm microdlnad
 server should share. Use this option several times if you have more than one
 directory to share. To restrict a path to one specific media type, you can use
 the following syntax: the letter
@@ -185,21 +185,21 @@ You can mix it up, find anything in music, but only Videos, in videos and movies
 Merge all media_dir base contents into the root container. The default value is no.
 .It Cm minissdpdsocket
 Path to the MiniSSDPd socket, if you want to use
-.Nm minidlnad
+.Nm microdlnad
 together with MiniSSDPd. Defaults to
 .Pa /run/minissdpd.sock .
 .It Cm model_name
 Set the model name reported to clients.
 Defaults to
-.Dq Windows Media Connect compatible (MiniDLNA) .
+.Dq Windows Media Connect compatible (microDLNA) .
 .It Cm model_number
 Set the model number reported to clients. Defaults to the version number of
-.Nm minidlnad .
+.Nm microdlnad .
 .It Cm network_interface
 Network interface(s) to bind to
 .Pq e.g. eth0 ,
 comma delimited. This option can be specified more than once. If unspecified or empty,
-.Nm minidlnad
+.Nm microdlnad
 binds to all the valid network interfaces
 .Pq except loopback .
 .It Cm notify_interval
@@ -210,7 +210,7 @@ Port number for HTTP traffic
 A port set here or on the command line
 .Pq Fl p , Fl -port
 is used exactly, and
-.Nm minidlnad
+.Nm microdlnad
 exits if it is in use. Without one, the first free port from 8200 upwards is
 used; clients find the server through SSDP discovery whatever its port.
 Instances not on 8200 also get a UUID and a default
@@ -235,7 +235,7 @@ each name is transliterated once.
 The gzipped dictionary of
 .Cm sort_transliteration Ns = Ns Dq pinyin ,
 by default
-.Pa /usr/share/minidlna/pinyin-dict.txt.gz .
+.Pa /usr/share/microdlna/pinyin-dict.txt.gz .
 .It Cm probe_limit
 Without
 .Cm db_dir :
@@ -314,11 +314,11 @@ method.
 .It Cm user
 Specify the user name or UID to switch to after starting. Empty (the
 default) keeps running as the user that started
-.Nm minidlnad :
+.Nm microdlnad :
 the invoking user when run directly, or root when started by
-.Pa minidlna.service
+.Pa microdlna.service
 or
-.Pa /etc/init.d/minidlna .
+.Pa /etc/init.d/microdlna .
 An ordinary user that cannot write the default log and pid locations gets
 per-user ones under
 .Ev XDG_STATE_HOME
@@ -344,7 +344,7 @@ jpg/jpeg/png/webp
 Extensions without a built-in tag reader are probed with libavformat.
 Pictures other than JPEG are served as they are, without resized versions.
 .It Cm uuid
-Specify device's UPnP UUID minidlna should use. By default MAC address is used to build uniq UUID.
+Specify device's UPnP UUID microdlna should use. By default MAC address is used to build uniq UUID.
 .It Cm wide_links
 Set to
 .Dq no
@@ -378,8 +378,8 @@ to make thumbnails have a film strip.
 .El
 .Sh FILES
 .Bl -tag -width Ds
-.It Pa /etc/minidlna.conf
+.It Pa /etc/microdlna.conf
 System-wide default configuration file.
 .El
 .Sh SEE ALSO
-.Xr minidlnad 8
+.Xr microdlnad 8

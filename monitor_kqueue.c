@@ -39,7 +39,7 @@
 #include "event.h"
 #include "log.h"
 #include "monitor.h"
-#include "minidlnatypes.h"
+#include "microdlnatypes.h"
 #include "upnpglobalvars.h"
 #include "sql.h"
 #include "utils.h"
@@ -262,7 +262,7 @@ monitor_remove_watch(int fd __unused, const char *path __unused)
 /*
  * XXXGL: this function has some copypaste with inotify_create_watches().
  * We need to push more code to platform independent start_monitor()
- * in minidlna.c.
+ * in microdlna.c.
  */
 void
 monitor_start()

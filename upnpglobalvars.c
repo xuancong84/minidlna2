@@ -1,23 +1,23 @@
-/* MiniDLNA project
+/* microDLNA project, derived from MiniDLNA
  *
  * http://sourceforge.net/projects/minidlna/
  *
- * MiniDLNA media server
+ * microDLNA media server
  * Copyright (C) 2008-2009  Justin Maggard
  *
- * This file is part of MiniDLNA.
+ * This file is part of microDLNA.
  *
- * MiniDLNA is free software; you can redistribute it and/or modify
+ * microDLNA is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
  *
- * MiniDLNA is distributed in the hope that it will be useful,
+ * microDLNA is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with MiniDLNA. If not, see <http://www.gnu.org/licenses/>.
+ * along with microDLNA. If not, see <http://www.gnu.org/licenses/>.
  *
  * Portions of the code from the MiniUPnP project:
  *
@@ -60,11 +60,11 @@ time_t startup_time = 0;
 struct runtime_vars_s runtime_vars;
 uint32_t runtime_flags = INOTIFY_MASK | TIVO_BONJOUR_MASK | SUBTITLES_MASK | WIDE_LINKS_MASK;
 
-const char *pidfilename = "/run/minidlna/minidlna.pid";
+const char *pidfilename = "/run/microdlna/microdlna.pid";
 
 char uuidvalue[] = "uuid:00000000-0000-0000-0000-000000000000";
 char modelname[MODELNAME_MAX_LEN] = ROOTDEV_MODELNAME;
-char modelnumber[MODELNUMBER_MAX_LEN] = MINIDLNA_VERSION;
+char modelnumber[MODELNUMBER_MAX_LEN] = MICRODLNA_VERSION;
 char serialnumber[SERIALNUMBER_MAX_LEN] = "00000000";
 
 /* presentation url :

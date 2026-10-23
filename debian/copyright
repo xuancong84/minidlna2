@@ -7,6 +7,9 @@ Source: https://sourceforge.net/projects/minidlna/files/
  containing the free Debian logo instead. It can be generated from the SVG logo
  using the debian/extra/make_icons.sh script (see the header of that file for
  instructions).
+ .
+ microDLNA (https://github.com/xuancong84/minidlna2) is derived from minidlna
+ 1.3.3 and renames its files; the stanzas below list them by their new names.
 
 Files: debian/*
 Copyright: 2010-2014, Benoît Knecht <benoit.knecht@fsfe.org>
@@ -16,12 +19,12 @@ License: BSD-3-clause
 Files: albumart.? containers.? image_utils.? monitor.? metadata.?
        playlist.? scanner.? scanner_sqlite.h sendfile.h sql.? tivo_beacon.h
        tivo_commands.? tivo_utils.? upnpsoap.h utils.? uuid.?
-       AUTHORS NEWS README TODO minidlna.conf linux/minidlna.init.d.script.tmpl
+       AUTHORS NEWS README TODO microdlna.conf linux/microdlna.init.d.script.tmpl
        .gitignore ChangeLog COPYING
 Copyright: 2008-2017, Justin Maggard <jmaggard@users.sourceforge.net>
 License: GPL-2
 
-Files: minidlna.conf.5 minidlnad.8
+Files: microdlna.conf.5 microdlnad.8
 Copyright: 2008 Noel Butler <noelb@ausics.net>
 License: GPL-2
 
@@ -55,13 +58,13 @@ Copyright: Daniel Stonier <d.stonier AT gmail DOT com>
            2017, NETGEAR
 License: GPL-2
 
-Files: codelength.h getifaddr.? minidlnapath.h minidlnatypes.h minissdp.?
+Files: codelength.h getifaddr.? microdlnapath.h microdlnatypes.h minissdp.?
        minixml.? options.? testupnpdescgen.c upnpdescgen.? upnpreplyparse.?
        LICENCE.miniupnpd
 Copyright: 2005-2008, Thomas Bernard <miniupnp@free.fr>
 License: BSD-3-clause
 
-Files: minidlna.c upnpevents.? upnpglobalvars.? upnphttp.? upnpsoap.c
+Files: microdlna.c upnpevents.? upnpglobalvars.? upnphttp.? upnpsoap.c
 Copyright: 2006-2007, Thomas Bernard <miniupnp@free.fr>
            2008-2012, Justin Maggard <jmaggard@users.sourceforge.net>
 License: BSD-3-clause and GPL-2
@@ -110,13 +113,13 @@ Files: linux/inotify-syscalls.h
 Copyright: 2005, Robert Love <robert.w.love@intel.com>
 License: GPL-2
 
-Files: debian/minidlna.postinst debian/minidlna.postrm debian/minidlna.init
+Files: debian/microdlna.postinst debian/microdlna.postrm debian/microdlna.init
 Copyright: 2007-2008, Leonhard Wimmer <leo@mediatomb.cc>
            2007-2008, Andres Mejia <mcitadel@gmail.com>
            2010-2013, Benoît Knecht <benoit.knecht@fsfe.org>
 License: GPL-2
 
-Files: debian/minidlna.conf.5
+Files: debian/microdlna.conf.5
 Copyright: 2008, Noel Butler <noelb@ausics.net>
            2009, Justin Maggard <jmaggard@users.sourceforge.net>
            2010-2012, Benoît Knecht <benoit.knecht@fsfe.org>

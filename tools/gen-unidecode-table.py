@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Generate unidecode_table.c from Python's Unidecode, so that minidlna's
+# Generate unidecode_table.c from Python's Unidecode, so that microdlna's
 # transliteration (used for sorting live folders) matches
 # unidecode.unidecode() exactly, without needing Python at build or run time.
 #

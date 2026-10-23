@@ -1,12 +1,12 @@
 #!/bin/sh
-# postinst script for minidlna
+# postinst script for microdlna
 
 set -e
 
 fix_statoverride() {
 	# Previous versions create some dumb overrides and do not clean them on
 	# removal, so we should remove them here.
-        for file in /var/lib/minidlna /var/cache/minidlna /etc/minidlna.conf;do
+        for file in /var/lib/microdlna /var/cache/microdlna /etc/microdlna.conf;do
 		if dpkg-statoverride --list "${file}" >/dev/null; then
 			dpkg-statoverride --remove "${file}"
 		fi
@@ -16,7 +16,7 @@ fix_statoverride() {
 fix_permissions() {
 	# Previous versions use some strange and even not secure permissions,
 	# so we should fix them here.
-	chown root:root /etc/minidlna.conf
+	chown root:root /etc/microdlna.conf
 }
 
 ACTION="$1"

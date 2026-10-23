@@ -26,12 +26,12 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
-#ifndef __MINIDLNAPATH_H__
-#define __MINIDLNAPATH_H__
+#ifndef __MICRODLNAPATH_H__
+#define __MICRODLNAPATH_H__
 
 #include "config.h"
 
-/* Paths and other URLs in the minidlna http server */
+/* Paths and other URLs in the microdlna http server */
 
 #define ROOTDESC_PATH 				"/rootDesc.xml"
 

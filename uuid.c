@@ -1,4 +1,4 @@
-/* MiniDLNA project
+/* microDLNA project, derived from MiniDLNA
  *
  * http://sourceforge.net/projects/minidlna/
  *
@@ -6,22 +6,22 @@
  * from Helge Deller's proposed Linux kernel patch (which
  * apparently never made it upstream), and some from Busybox.
  *
- * MiniDLNA media server
+ * microDLNA media server
  * Copyright (C) 2009  Justin Maggard
  *
- * This file is part of MiniDLNA.
+ * This file is part of microDLNA.
  *
- * MiniDLNA is free software; you can redistribute it and/or modify
+ * microDLNA is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
  *
- * MiniDLNA is distributed in the hope that it will be useful,
+ * microDLNA is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with MiniDLNA. If not, see <http://www.gnu.org/licenses/>.
+ * along with microDLNA. If not, see <http://www.gnu.org/licenses/>.
  */
 #include "config.h"
 #include <stdio.h>

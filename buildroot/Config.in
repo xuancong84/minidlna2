@@ -1,1 +1,1 @@
-source "$BR2_EXTERNAL_READYMEDIA_PATH/readymedia/Config.in"
+source "$BR2_EXTERNAL_MICRODLNA_PATH/microdlna/Config.in"

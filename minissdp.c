@@ -1,5 +1,5 @@
-/* MiniDLNA media server
- * This file is part of MiniDLNA.
+/* microDLNA media server
+ * This file is part of microDLNA.
  *
  * The code herein is based on the MiniUPnP Project.
  * http://miniupnp.free.fr/ or http://miniupnp.tuxfamily.org/
@@ -43,7 +43,7 @@
 #include <errno.h>
 
 #include "event.h"
-#include "minidlnapath.h"
+#include "microdlnapath.h"
 #include "upnphttp.h"
 #include "upnpglobalvars.h"
 #include "upnpreplyparse.h"
@@ -239,7 +239,7 @@ SendSSDPResponse(int s, struct sockaddr_in sockname, int st_no,
 	 * follow guideline from document "UPnP Device Architecture 1.0"
 	 * uppercase is recommended.
 	 * DATE: is recommended
-	 * SERVER: OS/ver UPnP/1.0 minidlna/1.0
+	 * SERVER: OS/ver UPnP/1.0 microdlna/1.0
 	 * - check what to put in the 'Cache-Control' header 
 	 * */
 	strftime(tmstr, sizeof(tmstr), "%a, %d %b %Y %H:%M:%S GMT", gmtime(&tm));
@@ -249,7 +249,7 @@ SendSSDPResponse(int s, struct sockaddr_in sockname, int st_no,
 		"ST: %s%s\r\n"
 		"USN: %s%s%s%s\r\n"
 		"EXT:\r\n"
-		"SERVER: " MINIDLNA_SERVER_STRING "\r\n"
+		"SERVER: " MICRODLNA_SERVER_STRING "\r\n"
 		"LOCATION: http://%s:%u" ROOTDESC_PATH "\r\n"
 		"Content-Length: 0\r\n"
 		"\r\n",
@@ -298,7 +298,7 @@ SendSSDPNotifies(int s, const char *host, unsigned short port,
 					"HOST:%s:%d\r\n"
 					"CACHE-CONTROL:max-age=%u\r\n"
 					"LOCATION:http://%s:%d" ROOTDESC_PATH"\r\n"
-					"SERVER: " MINIDLNA_SERVER_STRING "\r\n"
+					"SERVER: " MICRODLNA_SERVER_STRING "\r\n"
 					"NT:%s%s\r\n"
 					"USN:%s%s%s%s\r\n"
 					"NTS:ssdp:alive\r\n"
@@ -867,9 +867,9 @@ SubmitServicesToMiniSSDPD(const char *host, unsigned short port)
 		CODELENGTH(l, p);
 		memcpy(p, strbuf, l);
 		p += l;
-		l = strlen(MINIDLNA_SERVER_STRING);
+		l = strlen(MICRODLNA_SERVER_STRING);
 		CODELENGTH(l, p);
-		memcpy(p, MINIDLNA_SERVER_STRING, l);
+		memcpy(p, MICRODLNA_SERVER_STRING, l);
 		p += l;
 		l = snprintf(strbuf, sizeof(strbuf), "http://%s:%u" ROOTDESC_PATH,
 		             host, (unsigned int)port);

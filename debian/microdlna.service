@@ -1,0 +1,19 @@
+[Unit]
+Description=microDLNA lightweight DLNA/UPnP-AV server
+Documentation=man:microdlnad(1) man:microdlna.conf(5)
+After=local-fs.target remote-fs.target autofs.service
+
+[Service]
+# Runs as root; set user= in microdlna.conf to drop privileges after start-up.
+Environment=CONFIGFILE=/etc/microdlna.conf
+Environment=DAEMON_OPTS=-r
+EnvironmentFile=-/etc/default/microdlna
+
+RuntimeDirectory=microdlna
+LogsDirectory=microdlna
+PIDFile=/run/microdlna/microdlna.pid
+ExecStart=/usr/sbin/microdlnad -f $CONFIGFILE -P /run/microdlna/microdlna.pid -S $DAEMON_OPTS
+
+
+[Install]
+WantedBy=multi-user.target

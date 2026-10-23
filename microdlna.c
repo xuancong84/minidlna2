@@ -1,23 +1,23 @@
-/* MiniDLNA project
+/* microDLNA project, derived from MiniDLNA
  *
  * http://sourceforge.net/projects/minidlna/
  *
- * MiniDLNA media server
+ * microDLNA media server
  * Copyright (C) 2008-2012  Justin Maggard
  *
- * This file is part of MiniDLNA.
+ * This file is part of microDLNA.
  *
- * MiniDLNA is free software; you can redistribute it and/or modify
+ * microDLNA is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
  *
- * MiniDLNA is distributed in the hope that it will be useful,
+ * microDLNA is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with MiniDLNA. If not, see <http://www.gnu.org/licenses/>.
+ * along with microDLNA. If not, see <http://www.gnu.org/licenses/>.
  *
  * Portions of the code from the MiniUPnP project:
  *
@@ -82,13 +82,13 @@
 #include "sql.h"
 #include "upnphttp.h"
 #include "upnpdescgen.h"
-#include "minidlnapath.h"
+#include "microdlnapath.h"
 #include "getifaddr.h"
 #include "upnpsoap.h"
 #include "options.h"
 #include "utils.h"
 #include "minissdp.h"
-#include "minidlnatypes.h"
+#include "microdlnatypes.h"
 #include "process.h"
 #include "upnpevents.h"
 #include "scanner.h"
@@ -521,7 +521,7 @@ writepidfile(const char *fname, int pid, uid_t uid)
 }
 
 /* Per-user fallback directory for an unprivileged daemon,
- * e.g. $XDG_STATE_HOME/minidlna or ~/.local/state/minidlna */
+ * e.g. $XDG_STATE_HOME/microdlna or ~/.local/state/microdlna */
 static int
 user_dir(char *buf, size_t len, const char *xdg_var, const char *home_sub)
 {
@@ -529,9 +529,9 @@ user_dir(char *buf, size_t len, const char *xdg_var, const char *home_sub)
 	const char *home = getenv("HOME");
 
 	if (base && base[0] == '/')
-		snprintf(buf, len, "%s/minidlna", base);
+		snprintf(buf, len, "%s/microdlna", base);
 	else if (home && home[0] == '/')
-		snprintf(buf, len, "%s/%s/minidlna", home, home_sub);
+		snprintf(buf, len, "%s/%s/microdlna", home, home_sub);
 	else
 		return -1;
 
@@ -561,9 +561,9 @@ static void init_nls(void)
 	messages = setlocale(LC_MESSAGES, "");
 	if (!messages)
 		messages = "unset";
-	locale_dir = bindtextdomain("minidlna", getenv("TEXTDOMAINDIR"));
+	locale_dir = bindtextdomain("microdlna", getenv("TEXTDOMAINDIR"));
 	DPRINTF(E_DEBUG, L_GENERAL, "Using locale dir '%s' and locale language %s/%s\n", locale_dir, messages, ctype);
-	textdomain("minidlna");
+	textdomain("microdlna");
 #endif
 }
 
@@ -696,7 +696,7 @@ init(int argc, char **argv)
 	}
 
 	/* Without album_art_names nothing is found, so default to the list in
-	 * the shipped minidlna.conf */
+	 * the shipped microdlna.conf */
 	for (i = 0; i < num_options && ary_options[i].id != UPNPALBUMART_NAMES; i++)
 		;
 	if (i == num_options)
@@ -1160,7 +1160,7 @@ init(int argc, char **argv)
 			break;
 #endif
 		case 'V':
-			printf("Version " MINIDLNA_VERSION "\n");
+			printf("Version " MICRODLNA_VERSION "\n");
 			exit(0);
 			break;
 		default:
@@ -1183,7 +1183,7 @@ init(int argc, char **argv)
 #endif
 			"\t\t[--option=value | --option value]...\n"
 			"\nNotes:\n\tNotify interval is in seconds. Default is 895 seconds.\n"
-			"\tWithout -f no config file is read (not even /etc/minidlna.conf):\n"
+			"\tWithout -f no config file is read (not even /etc/microdlna.conf):\n"
 			"\tbuilt-in defaults and command line options apply, and the current\n"
 			"\tdirectory is served as the current user unless --media_dir is given.\n"
 			"\t--option=value sets any config file option and overrides the file,\n"
@@ -1194,9 +1194,9 @@ init(int argc, char **argv)
 		printoptionnames(stdout);
 		printf("\n"
 			"\tWithout a port setting, the first free port from 8200 is used.\n"
-			"\tWithout -P, the pid file is minidlna-<port>.pid in /run/minidlna\n"
-			"\t(in $XDG_RUNTIME_DIR/minidlna for ordinary users).\n"
-			"\tWith -d minidlna will run in debug mode (not daemonize).\n"
+			"\tWithout -P, the pid file is microdlna-<port>.pid in /run/microdlna\n"
+			"\t(in $XDG_RUNTIME_DIR/microdlna for ordinary users).\n"
+			"\tWith -d microdlna will run in debug mode (not daemonize).\n"
 			"\t-w sets the presentation url. Default is http address on port 80\n"
 			"\t-v enables verbose output\n"
 			"\t-h displays this text\n"
@@ -1238,7 +1238,7 @@ init(int argc, char **argv)
 			if (access(dirname(dir), W_OK) != 0 &&
 			    user_dir(dir, sizeof(dir), "XDG_RUNTIME_DIR", ".local/state") == 0)
 			{
-				snprintf(user_pidfile, sizeof(user_pidfile), "%s/minidlna.pid", dir);
+				snprintf(user_pidfile, sizeof(user_pidfile), "%s/microdlna.pid", dir);
 				pidfilename = user_pidfile;
 			}
 		}
@@ -1318,7 +1318,7 @@ init(int argc, char **argv)
 		char dir[PATH_MAX];
 
 		strncpyt(dir, pidfilename, sizeof(dir));
-		snprintf(port_pidfile, sizeof(port_pidfile), "%s/minidlna-%d.pid",
+		snprintf(port_pidfile, sizeof(port_pidfile), "%s/microdlna-%d.pid",
 		         dirname(dir), runtime_vars.port);
 		pidfilename = port_pidfile;
 		if (process_check_if_running(pidfilename) < 0)
@@ -1442,7 +1442,7 @@ main(int argc, char **argv)
 		return 1;
 	init_nls();
 
-	DPRINTF(E_WARN, L_GENERAL, "Starting " SERVER_NAME " version " MINIDLNA_VERSION ".\n");
+	DPRINTF(E_WARN, L_GENERAL, "Starting " SERVER_NAME " version " MICRODLNA_VERSION ".\n");
 	if (sqlite3_libversion_number() < 3005001)
 	{
 		DPRINTF(E_WARN, L_GENERAL, "SQLite library is old.  Please use version 3.5.1 or newer.\n");

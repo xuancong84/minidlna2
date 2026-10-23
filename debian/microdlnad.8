@@ -1,4 +1,4 @@
-.\" Man page for minidlnad
+.\" Man page for microdlnad
 .\"
 .\" Copyright (C) 2010-2013 Benoît Knecht <benoit.knecht@fsfe.org>
 .\"
@@ -14,10 +14,10 @@
 .\"    may be used to endorse or promote products derived from this software
 .\"    without specific prior written permission.
 .Dd June 7, 2013
-.Dt MINIDLNAD \&8 "System Manager's Manual"
+.Dt MICRODLNAD \&8 "System Manager's Manual"
 .Os Debian
 .Sh NAME
-.Nm minidlnad
+.Nm microdlnad
 .Nd lightweight DLNA/UPnP-AV server
 .Sh SYNOPSIS
 .Nm
@@ -55,14 +55,14 @@ behavior can be changed on the command-line using the
 option, or in the configuration file through the
 .Cm network_interface
 option
-.Pq see Xr minidlna.conf 5 for details .
+.Pq see Xr microdlna.conf 5 for details .
 .Pp
 A configuration file is only read when given with
 .Fl f ,
 as the
-.Nm minidlna
+.Nm microdlna
 service does with
-.Pa /etc/minidlna.conf .
+.Pa /etc/microdlna.conf .
 Started from a shell without
 .Fl f ,
 .Nm
@@ -73,7 +73,7 @@ as the user who started it.
 .Sh OPTIONS
 Most of the options below can also be set in a configuration file, as described
 in
-.Xr minidlna.conf 5 .
+.Xr microdlna.conf 5 .
 .Bl -tag -width Ds
 .It Fl - Ns Ar option Ns = Ns Ar value , Fl - Ns Ar option Ar value
 Set any configuration file option, overriding the file, e.g.
@@ -95,9 +95,9 @@ Activate debug mode (do not daemonize).
 Read this configuration file. Without
 .Fl f
 no file is read; the
-.Nm minidlna
+.Nm microdlna
 service passes
-.Fl f Pa /etc/minidlna.conf .
+.Fl f Pa /etc/microdlna.conf .
 .It Fl h
 Show help and exit.
 .It Fl i Ar interface
@@ -110,11 +110,11 @@ Model number the daemon will report to clients in its XML description.
 PID file to use. Without
 .Fl P
 it is
-.Pa minidlna- Ns Ar port Ns Pa .pid
+.Pa microdlna- Ns Ar port Ns Pa .pid
 in
-.Pa /run/minidlna ,
+.Pa /run/microdlna ,
 or in
-.Pa $XDG_RUNTIME_DIR/minidlna
+.Pa $XDG_RUNTIME_DIR/microdlna
 for ordinary users, so several instances can run at once.
 .It Fl p Ar port
 Port number to listen on, used exactly. Without a port, the first free port
@@ -154,9 +154,9 @@ Sets the presentation url; the default is http address.
 .El
 .Sh FILES
 .Bl -tag -width Ds -compact
-.It Pa /etc/minidlna.conf
+.It Pa /etc/microdlna.conf
 Default system-wide configuration file. See
-.Xr minidlna.conf 5
+.Xr microdlna.conf 5
 for details on the syntax.
 .El
 .Sh BUGS
@@ -164,4 +164,4 @@ Sometimes automatic transcoding fails. When this happens, a workaround is to man
 .Pp
 $ ffmpeg.exe \-i input.mkv \-map 0:v \-map 0:a:0 \-map 0:a \-map 0:s? \-c:v copy \-c:s copy \-c:a copy \-c:a:0 eac3 \-ab 1536k \-disposition:a:0 default \-disposition:a:1 0 output.mkv
 .Sh SEE ALSO
-.Xr minidlna.conf 5
+.Xr microdlna.conf 5

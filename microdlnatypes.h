@@ -26,8 +26,8 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
-#ifndef __MINIDLNATYPES_H__
-#define __MINIDLNATYPES_H__
+#ifndef __MICRODLNATYPES_H__
+#define __MICRODLNATYPES_H__
 
 #include "config.h"
 #include "clients.h"

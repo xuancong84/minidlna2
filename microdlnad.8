@@ -1,13 +1,13 @@
-.\" minidlnad man page
-.TH minidlnad 8 "October 2012"
+.\" microdlnad man page
+.TH microdlnad 8 "October 2012"
 .SH NAME
-minidlnad \- MiniDLNA DLNA/UPnP-AV Server
+microdlnad \- microDLNA DLNA/UPnP-AV Server
 .SH SYNOPSIS
-minidlnad options
+microdlnad options
 
 .SH DESCRIPTION
 .PP
-.B minidlna
+.B microdlna
 is a lightweight but very functional DLNA/UPnP-AV server allowing easy 
 sharing of your media files including pictures to any capable device or
 client on your local wired and wireless network. Common PC software like 
@@ -17,72 +17,73 @@ on Android, and any media sharing capable DVR/TV etc.
 
 .SH OPTIONS
 .PP
-.B minidlna's 
-options are normally set from the global /etc/minidlna.conf file.
+.B microdlna's 
+options are normally set from the global /etc/microdlna.conf file.
 .nf
 But there may be times when you need to temporarily alter some of these options,
-you can do this by running minidlna with the following command line switches.
+you can do this by running microdlna with the following command line switches.
 .fi
 
-Without \fB\-f\fR, no configuration file is read, not even /etc/minidlna.conf:
-built-in defaults and command line options apply, and minidlna serves the
+Without \fB\-f\fR, no configuration file is read, not even /etc/microdlna.conf:
+built-in defaults and command line options apply, and microdlna serves the
 current directory ($PWD) as the user who started it.
 
 .IP "\fB\-\-\fR\fIoption\fR\fB=\fR\fIvalue\fR, \fB\-\-\fR\fIoption value\fR"
-Set any minidlna.conf option, overriding the file, e.g.
+Set any microdlna.conf option, overriding the file, e.g.
 \-\-media_dir=V,/srv/videos \-\-db_dir= \-\-port=8201. '-' may be used
 instead of '_' in option names. Giving \-\-media_dir, \-\-album_art_names or
 \-\-network_interface replaces the values from the file; repeat the option
 for several values.
 
 .IP "\fB\-R\fR \fIRescan\fR"
-This forces minidlna to rescan all of the media_dir directories.
+This forces microdlna to rescan all of the media_dir directories.
 
 .IP "\fB\-f\fR \fIconfig_file\fR"
 Read this configuration file. Without \fB\-f\fR no file is read; the
-minidlna service passes \fB\-f /etc/minidlna.conf\fR.
+microdlna service passes \fB\-f /etc/microdlna.conf\fR.
 
 .IP "\fB\-p\fR \fIport\fR"
-Run minidlna on this port exactly. Without a port, the first free port from
-8200 upwards is used, and the default pid file is named minidlna-<port>.pid.
+Run microdlna on this port exactly. Without a port, the first free port from
+8200 upwards is used, and the default pid file is named microdlna-<port>.pid.
 
 .IP "\fB\-w\fR \fIpresentation_url\fR"
 Change the default presentation url address.
 
 .IP "\fB\-d\fR \fIdebug\fR"
-minidlna will run in the foreground with debug output.
+microdlna will run in the foreground with debug output.
 
 .IP "\fB\-P\fR \fIpid_filename\fR"
 Specify a location for the PID file.
 
 .IP "\fB\-m\fR \fImodel\fR"
-Force minidlna to report a specific model number.
+Force microdlna to report a specific model number.
 
 .IP "\fB\-s\fR \fIserial\fR"
-Force minidlna to report a specific serial number.
+Force microdlna to report a specific serial number.
 
 .IP "\fB\-t\fR \fInotify_interval\fR"
 Change the notify interval, in seconds. Defaults to 895 seconds.
 
 .IP "\fB\-h\fR \fIhelp\fR"
-Show basic switch options for running minidlna.
+Show basic switch options for running microdlna.
 
 .IP "\fB\-V\fR \fIVersion\fR"
 Shows the program version number and exits.
 
 
 .SH VERSION
-This man page corresponds to minidlna version 1.1.0 
+This man page corresponds to microDLNA version 1.0.0
 
 .SH AUTHOR
 .nf
-minidlna developed by Justin Maggard  https://sourceforge.net/projects/minidlna/
+microDLNA (https://github.com/xuancong84/minidlna2) is derived from
+MiniDLNA, developed by Justin Maggard  https://sourceforge.net/projects/minidlna/
 man page written by Noel Butler <noelb@ausics.net>
 .fi
 
 .SH FILES
-/usr/sbin/minidlnad
+/usr/sbin/microdlnad
 
 .SH SEE ALSO
- minidlna.conf(5)
+ microdlna.conf(5)
 

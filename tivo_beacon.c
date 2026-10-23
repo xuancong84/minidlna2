@@ -11,7 +11,7 @@
  * byRequest TiVo HMO Server
  * Copyright (C) 2003  Dave Clemans
  *
- * This file is based on byRequest, and is part of MiniDLNA.
+ * This file is based on byRequest, and is part of microDLNA.
  *
  * byRequest is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -161,7 +161,7 @@ sendBeaconMessage(int fd, struct sockaddr_in * client, int len, int broadcast)
 	                                     "method=%s\n"
 	                                     "identity=%s\n"
 	                                     "machine=%s\n"
-	                                     "platform=pc/minidlna\n"
+	                                     "platform=pc/microdlna\n"
 	                                     "services=TiVoMediaServer:%d/http\n",
 	                                     broadcast ? "broadcast" : "connected",
 	                                     uuidvalue, friendly_name, runtime_vars.port);

@@ -1,23 +1,23 @@
-/* MiniDLNA project
+/* microDLNA project, derived from MiniDLNA
  *
  * http://sourceforge.net/projects/minidlna/
  *
- * MiniDLNA media server
+ * microDLNA media server
  * Copyright (C) 2008-2009  Justin Maggard
  *
- * This file is part of MiniDLNA.
+ * This file is part of microDLNA.
  *
- * MiniDLNA is free software; you can redistribute it and/or modify
+ * microDLNA is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
  *
- * MiniDLNA is distributed in the hope that it will be useful,
+ * microDLNA is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with MiniDLNA. If not, see <http://www.gnu.org/licenses/>.
+ * along with microDLNA. If not, see <http://www.gnu.org/licenses/>.
  *
  * Portions of the code from the MiniUPnP project:
  *
@@ -68,7 +68,7 @@
 #include "upnpglobalvars.h"
 #include "upnphttp.h"
 #include "upnpdescgen.h"
-#include "minidlnapath.h"
+#include "microdlnapath.h"
 #include "upnpsoap.h"
 #include "upnpevents.h"
 #include "utils.h"
@@ -628,7 +628,7 @@ SendResp_presentation(struct upnphttp * h)
 	h->respflags = FLAG_HTML;
 
 	strcatf(&str,
-		"<HTML><HEAD><TITLE>" SERVER_NAME " " MINIDLNA_VERSION "</TITLE><meta http-equiv=\"refresh\" content=\"20\"></HEAD>"
+		"<HTML><HEAD><TITLE>" SERVER_NAME " " MICRODLNA_VERSION "</TITLE><meta http-equiv=\"refresh\" content=\"20\"></HEAD>"
 		"<BODY><div style=\"text-align: center\">"
 		"<h2>" SERVER_NAME " status</h2></div>");
 
@@ -1215,7 +1215,7 @@ BuildHeader_upnphttp(struct upnphttp * h, int respcode,
 		"Content-Type: %s\r\n"
 		"Connection: close\r\n"
 		"Content-Length: %d\r\n"
-		"Server: " MINIDLNA_SERVER_STRING "\r\n";
+		"Server: " MICRODLNA_SERVER_STRING "\r\n";
 	time_t curtime = time(NULL);
 	char date[30];
 	int templen;
@@ -1399,7 +1399,7 @@ start_dlna_header(struct string_s *str, int respcode, const char *tmode, const c
 	strcatf(str, "HTTP/1.1 %d OK\r\n"
 	             "Connection: close\r\n"
 	             "Date: %s\r\n"
-	             "Server: " MINIDLNA_SERVER_STRING "\r\n"
+	             "Server: " MICRODLNA_SERVER_STRING "\r\n"
 	             "EXT:\r\n"
 	             "realTimeInfo.dlna.org: DLNA.ORG_TLAG=*\r\n"
 	             "transferMode.dlna.org: %s\r\n"
